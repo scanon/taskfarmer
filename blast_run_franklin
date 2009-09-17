@@ -1,0 +1,61 @@
+#!/bin/ksh
+BASE=/project/projectdirs/genomes/runs/cs/
+OUTPUT=$BASE/
+SERVER=$1
+PORT=4999
+TMPDIR=/tmp/genomes
+PATH=$TMPDIR:$PATH:$BASE/bin
+DBDIR=/scratch/scratchdirs/canon/jgi/test2/
+DB=refGenomes.faa
+
+# Cleanup any stale stuff
+rm -rf /tmp/genomes
+rm -rf /tmp/genome
+
+mkdir $TMPDIR
+cd $TMPDIR
+export LD_LIBRARY_PATH=/scratch/scratchdirs/canon/software/lib/
+
+function shutdown {
+  touch shutdown
+}
+
+function cleanup {
+#  echo "Called cleanup"
+  cd /tmp
+  rm -rf $TMPDIR
+  exit
+}
+trap cleanup 2 15
+trap shutdown 32
+
+let i=RANDOM/3000
+#sleep $i
+
+#
+#
+if [ ! -e $TMPDIR/$DB.pal ] ;then
+  cp $DBDIR/$DB.* $TMPDIR/
+  cp $BASE/bin/* $TMPDIR/
+fi
+
+echo "DONE"|netcat $SERVER $PORT > query
+while [ -s ./query ] ; do
+   cat query|blastall -p blastp -d ./$DB \
+    -F 'm S' -e 1e-2 -b 2000 -z 700000000 \
+    -m 8 -o output -a 4 2>&1 |grep -v Selenocysteine
+#   cat query
+#sleep 1
+  cat error*
+  if [ ! -s ./output ] ; then
+    echo "empty" > output
+  fi
+  if [ -e shutdown ] ; then
+    (cat output;echo "DONE")|netcat $SERVER $PORT > query
+  else
+    (cat output;echo "DONE")|netcat $SERVER $PORT > query
+  fi
+done
+
+cleanup
+

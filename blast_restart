@@ -1,0 +1,78 @@
+#!/usr/bin/perl
+$requests=$ARGV[0];
+
+open(PROG,"progress");
+while(<PROG>){
+  ($i,$host,$time,$seq,$lines)=split /:/; 
+  $sum+=$time;
+  $done[$i]=1;
+  $max=$i if ($i>$max);
+#  $headers{$seq}=1 if $lines>0; 
+  $headers{$seq}=1;
+  $ct++;
+}
+close PROG;
+printf stderr "Average time: %d\n",$sum/$ct;
+
+$ct=0;
+open(LIST,"list");
+while(<LIST>){
+  chomp;
+  $headers{$_}=1;
+  $ct++;
+}
+close LIST;
+$max+=$ct;
+
+for ($i=0;$i<$max && defined $done[$i];$i++){
+} 
+$min=$i;
+$min=$ARGV[1] if defined $ARGV[1];
+$max=$ARGV[2] if defined $ARGV[2];
+print stderr "Min: $min\n";
+print stderr "Max: $max\n";
+#for ($i=0;$i<$max;$i++){
+##  print "$i $done[$i]\n";
+#  if ($done[$i]!=1){
+#  $missing[$i]=1;
+#  }
+#}
+#for ($i=min;$i<$max;$i++){
+##  print "$i $missing[$i]\n";
+#}
+undef @done;
+
+
+$item=-1;
+while(<stdin>){
+  $item++ if (/^>/);
+#  print "$item: $_";
+  last if $item eq $min;
+}
+
+#print stderr "Done with recovery\n";
+$new=0;
+$print=1;
+while($new<$requests){
+    ($bl,$header,$rest)=split /[> ]/;
+    print stderr "Done with recovery phase\n" if $item eq $max;
+    if ($item<$max){
+      if (defined $headers{$header}){
+#        print stderr "Skipping $item $header\n";
+         print stderr "-" if ($item%10000 eq 0);
+        $print=0;
+       }
+       else{
+         print stderr "+";
+       }
+     } 
+     print if $print;
+     $_=<stdin>;
+     while(! /^>/){
+       print if $print;
+       $_= <stdin>;
+     }
+     $item++;
+     $new++ if $print;
+     $print=1;
+}
