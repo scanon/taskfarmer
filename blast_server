@@ -29,6 +29,7 @@ open(PROGRESS,">> ./progress");
 open(OUTPUT,">> ./final.output");
 open(ERROR,">> ./error.output");
 $SIG{INT} = \&catch_int;  # best strategy
+$input=<stdin>;
 while ($remaining){
   $address=accept(CLIENT, SERVER);
   next unless $address;
@@ -49,9 +50,9 @@ while ($remaining){
         $_=<CLIENT>;
         if (/^DONE$/){
           if (defined $start{$seq}){
-            printf PROGRESS "%s:%s:%d:%d:%d\n", 
+            printf PROGRESS "%s|%s|%d|%d|%d|%d\n", 
 		$seq,$ident,time-$start{$seq},
-		$lines,time;
+		$lines,time,$len{$seq};
             printf "%-8d seq:%25s host:%-16s  time:%-4ds lines: %d\n", 
 		$processed, $seq,$ident,
 		time-$start{$seq},$lines;
@@ -94,15 +95,19 @@ while ($remaining){
   if ($send_query && ! $shutdown){
     $next=1;
     $header=0;
+    $length=0;
     while($next eq 1){
+      $input=~s/\r//;
+      ($bl,$header,$rest)=split /[> \r\n]/,$input unless $header;
+      print CLIENT $input;
+      $length+=length $input;
       last if eof(stdin);
-      $_=<>;
-      ($bl,$header,$rest)=split /[> ]/ unless $header;
-      print CLIENT $_;
-      $next=0 if /^$/;
+      $input=<stdin>;
+      $next=0 if $input=~/^>/;
     }
     $start{$header}=time if $header ne 0;
-    print "Sent: $item:$header to $cHost:$ident\n";
+    $len{$header}=$length if $header ne 0;
+    print "Sent: $item:$header to $cHost:$ident:$length\n";
     $item++;
   }
   close CLIENT;

@@ -1,11 +1,13 @@
 #!/bin/ksh
-BASE=/project/projectdirs/genomes/runs/cs/
+BASE=/project/projectdirs/genomes/runs/kostas/
 OUTPUT=$BASE/
 SERVER=$1
 PORT=4999
+TIMEOUT=45
 TMPDIR=/tmp/genomes
 PATH=$TMPDIR:$PATH:$BASE/bin
-DBDIR=/scratch/scratchdirs/canon/jgi/test2/
+DBDIR=/project/projectdirs/genomes/runs/backlog/db
+DBDIR=/scratch/scratchdirs/canon/jgi/backlog
 DB=refGenomes.faa
 
 # Cleanup any stale stuff
@@ -14,8 +16,6 @@ rm -rf /tmp/genomes
 mkdir $TMPDIR
 cd $TMPDIR
 export LD_LIBRARY_PATH=/scratch/scratchdirs/canon/software/lib/
-i=$(date +%s)
-let i=i+700
 
 function fshutdown {
   echo "Shutting down"
@@ -31,50 +31,53 @@ function cleanup {
 trap cleanup 2 15
 #trap fshutdown 17
 
+let i=RANDOM/3000
+#sleep $i
 
 #
 #
 if [ ! -e $TMPDIR/$DB.pal ] ;then
   cp $DBDIR/$DB.* $TMPDIR/
+#  ln -s $DBDIR/$DB.* $TMPDIR/
   cp $BASE/bin/* $TMPDIR/
 fi
 
-while [ $(date +%s) -lt $i ] ; do
-  sleep 1
-done
-
-
 ID="frank-$(cat /proc/cray_xt/nid)"
-
 
 (echo "IDENT $ID";echo "NEXT")|netcat $SERVER $PORT > query
 while [ -s ./query ] ; do
    header=$(grep '^>' query|sed 's/>//'|sed 's/ .*//' )
-   cat query|blastall -p blastp -d ./$DB \
-    -F 'm S' -e 1e-2 -b 2000 -z 700000000 \
-    -m 8 -o output -a 4 2>&1 |grep -v Selenocysteine
+#   cat query|blastall -p blastp -d ./$DB \
+#    -F 'm S' -e 1e-2 -b 2000 -z 700000000 \
+#    -m 8 -o output -a 4 2>&1 |grep -v Selenocysteine
+   cat query|blastall -p blastx -a 4 -w 15 -d ./$DB -m0 -b 1000 -v 1000 -e 1 -o output 2>&1
 #   cat query
 #sleep 1
-  cat error*
+#  cat error*
   echo "IDENT $ID" > message
   echo "RESULTS $header" >> message
   cat output >> message
   echo "DONE" >> message
-  if [ -e shutdown ] ; then
+  if [ ! -e shutdown ] ; then
+    echo "NEXT" >> message 
+  fi
+
+# Send Message
+ retry=10
+ (cat message)|netcat -w $TIMEOUT $SERVER $PORT > response
+  while [ $retry -gt 0 ] && [ $(grep -c RECEIVED response) -eq 0 ] ; do
+    echo "Retrying"
+    (cat message)|netcat -w $TIMEOUT $SERVER $PORT > response
+    let retry=retry-1
+  done
+
+  if [ -e shutdown ] || [ $retry -eq 0 ] ; then
     echo "Shutting down"
-    (cat message)|netcat $SERVER $PORT > response
     cleanup
-  else
-    (cat message;echo "NEXT")| netcat $SERVER $PORT > response
   fi
+#
   rm query
-  if [ $(grep -c RECEIVED response) -gt 0 ]; then
-    grep -v RECEIVED response  > query
-  else
-    echo "Not sure if the response was recieved"
-    cat response
-    grep -v RECEIVED response  > query
-  fi
+  grep -v RECEIVED response  > query
 done
 
 cleanup

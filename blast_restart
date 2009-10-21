@@ -8,7 +8,8 @@ $|=1;
 print stderr "Reading Progress file\n";
 open(PROG,"progress");
 while(<PROG>){
-  ($seq,$host,$time,$$lines,$walltime)=split /:/; 
+  ($seq,$host,$time,$$lines,$walltime)=split /\|/; 
+#print stderr "seq: $seq\n";
   $sum+=$time;
   $headers{$seq}=1;
   $ct++;
@@ -42,7 +43,8 @@ while(<stdin>){
     print stderr "d" if ($item%$dots eq 0);
     print stderr "D" if ($item%(10*$dots) eq 0);
     $item++;
-    ($bl,$header,$rest)=split /[> ]/;
+    ($bl,$header,$rest)=split /[> \r\n]/;
+    chomp $header;
     last if ! defined $headers{$header};
   }
     
@@ -58,7 +60,7 @@ print stderr "Max: $max\n";
 $new=0;
 $print=1;
 while($new<$requests){
-    ($bl,$header,$rest)=split /[> ]/;
+    ($bl,$header,$rest)=split /[> \r\n]/;
     print stderr "Done with recovery phase\n" if $item eq $max;
     if ($item<$max){
       if (defined $headers{$header}){

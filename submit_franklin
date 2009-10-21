@@ -1,0 +1,24 @@
+#!/bin/sh
+#
+#PBS -l mppwidth=4000,mppnppn=4,walltime=02:00:00
+#PBS -N BLAST 
+#PBS -A m342
+#PBS -q regular
+#PBS -V
+
+cd /project/projectdirs/genomes/runs/backlog
+
+# Start Relay and get the IP address for the MOM node
+#
+port=$(./tcprelay dtn02.nersc.gov 4999)
+addr=$(/sbin/ifconfig ss|grep 'inet addr'|awk -F: '{print $2}'|sed 's/ .*//')
+echo "$port $addr"
+
+# Run the job
+#
+aprun -n 1000 -N 1 -d 4 -a xt ./run2 $addr $port
+
+# Shutdown relay
+#
+./tcprelay -k $port
+
