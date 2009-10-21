@@ -2,9 +2,8 @@
 
 use Socket;
 
-$server_port=4999;
-$MAX=100;
-$|=1;
+my $server_port=4999;
+my $BATCHSIZE=16;
 
 # make the socket
 socket(SERVER, PF_INET, SOCK_STREAM, getprotobyname('tcp'));
@@ -13,7 +12,7 @@ socket(SERVER, PF_INET, SOCK_STREAM, getprotobyname('tcp'));
 setsockopt(SERVER, SOL_SOCKET, SO_REUSEADDR, 1);
 
 # build up my socket address
-$my_addr = sockaddr_in($server_port, INADDR_ANY);
+my $my_addr = sockaddr_in($server_port, INADDR_ANY);
 bind(SERVER, $my_addr)
     or die "Couldn't bind to port $server_port : $!\n";
 
@@ -35,6 +34,7 @@ while ($remaining){
   next unless $address;
   ($cDomain, $cPort, $cAdd) = unpack('S n a4 x8', $address);
   $cHost=join('.',unpack('C4', $cAdd));
+#  print "Connect from $cHost\n";
 
   $got_response=0;
   $send_query=0;
@@ -42,6 +42,7 @@ while ($remaining){
 # Read from client
 #
   while(<CLIENT>){
+# print $_;
     if (/^RESULTS /){
       $lines=0;
       ($COMMAND,$seq)=split;
@@ -49,15 +50,16 @@ while ($remaining){
       while(! $got_response){
         $_=<CLIENT>;
         if (/^DONE$/){
-          if (defined $start{$seq}){
-            printf PROGRESS "%s|%s|%d|%d|%d|%d\n", 
-		$seq,$ident,time-$start{$seq},
-		$lines,time,$len{$seq};
+          if (defined $job{$seq}){
+            $sequences=join ",",@{$job{$seq}->{list}};
+            printf PROGRESS "%s %s %d %d %d %d\n", 
+		$sequences,$ident,time-$job{$seq}->{start},
+		$lines,time,$job{$seq}->{len};
             printf "%-8d seq:%25s host:%-16s  time:%-4ds lines: %d\n", 
-		$processed, $seq,$ident,
-		time-$start{$seq},$lines;
-            delete $start{$seq};
-            $processed++;
+		$processed, $sequences,$ident,
+		time-$job{$seq}->{start},$lines;
+            $processed+=$job{$seq}->{count};
+            delete $job{$seq};
           }
           else{
             print stderr "Unexpect report from $cHost:$ident for $seq\n";
@@ -83,37 +85,41 @@ while ($remaining){
     }
   }
 #
-# Were we expecting a response but didn't get one?
-#
-#  if ($sent{$seq}>0 && ! $got_response){
-#    print ERROR "no report for $seq{$cHost}:$headers{$cHost} from $cHost\n" if defined $sent{$cHost};
-#    print "no report for $sent{$cHost}:$headers{$cHost} from $cHost\n" if defined $sent{$cHost};
-#  }
 #
 # Do we need to send a query?  Make sure we aren't in a shutdown.
 #
-  if ($send_query && ! $shutdown){
+  if ($send_query && $shutdown==0){
     $next=1;
     $header=0;
     $length=0;
+    $batch=0;
+    $sent=[];
     while($next eq 1){
+      last if ($input=~/^>/ && $batch==$BATCHSIZE);      
+      last if eof(stdin);
       $input=~s/\r//;
-      ($bl,$header,$rest)=split /[> \r\n]/,$input unless $header;
       print CLIENT $input;
       $length+=length $input;
-      last if eof(stdin);
+      if ($input=~/^>/){
+        ($bl,$header,$rest)=split /[> \r\n]/,$input;
+        push @{$sent}, $header;
+        $batch++;
+      }
       $input=<stdin>;
-      $next=0 if $input=~/^>/;
     }
-    $start{$header}=time if $header ne 0;
-    $len{$header}=$length if $header ne 0;
+    if ($header ne 0){
+      $job{$header}->{start}=time;
+      $job{$header}->{len}=$length;
+      $job{$header}->{list}=$sent; 
+      $job{$header}->{count}=$batch; 
+    }
     print "Sent: $item:$header to $cHost:$ident:$length\n";
     $item++;
   }
   close CLIENT;
   if ( eof(stdin) || $shutdown){
     $shutdown=1;
-    $remaining=keys %start;
+    $remaining=keys %job;
     print "Draining: $remaining remaining connections\n";
   }
 }

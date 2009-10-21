@@ -8,16 +8,18 @@ $|=1;
 print stderr "Reading Progress file\n";
 open(PROG,"progress");
 while(<PROG>){
-  ($seq,$host,$time,$$lines,$walltime)=split /\|/; 
+  ($seqlist,$host,$time,$lines,$walltime)=split / /; 
 #print stderr "seq: $seq\n";
   $sum+=$time;
-  $headers{$seq}=1;
-  $ct++;
-  print stderr "." if ($ct%$dots eq 0);
-  print stderr "o" if ($ct%(10*$dots) eq 0);
+  foreach $seq (split /,/,$seqlist){
+    $headers{$seq}=1;
+    $ct++;
+    print stderr "." if ($ct%$dots eq 0);
+    print stderr "o" if ($ct%(10*$dots) eq 0);
+  }
 }
 close PROG;
-printf stderr "\nAverage time: %d\n",$sum/$ct;
+printf stderr "\nAverage time: %d\n",$sum/$ct if $ct;
 
 open(RERUN,"rerun.lst");
 while(<RERUN>){
@@ -64,14 +66,14 @@ while($new<$requests){
     print stderr "Done with recovery phase\n" if $item eq $max;
     if ($item<$max){
       if (defined $headers{$header}){
-#        print stderr "Skipping $item $header\n";
+        print stderr "Skipping $item $header\n";
          print stderr "-" if ($item%$dots eq 0);
         $print=0;
        }
        else{
          print stderr "+";
        }
-     } 
+     }
      print if $print;
      $_=<stdin>;
      while(! /^>/ && ! eof(stdin)){
