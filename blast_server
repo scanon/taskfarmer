@@ -3,6 +3,8 @@
 use Socket;
 
 $server_port=4999;
+$MAX=100;
+$|=1;
 
 # make the socket
 socket(SERVER, PF_INET, SOCK_STREAM, getprotobyname('tcp'));
@@ -21,87 +23,95 @@ listen(SERVER, SOMAXCONN)
 
 # accept and process connections
 $item=0;
+$remaining=1;
+$shutdown=0;
 open(PROGRESS,">> ./progress");
 open(OUTPUT,">> ./final.output");
 open(ERROR,">> ./error.output");
 $SIG{INT} = \&catch_int;  # best strategy
-while (<stdin> ){
-  ($bl,$header,$rest)=split /[> ]/;
-  $address=accept(CLIENT, SERVER);
-  ($cDomain, $cPort, $cAdd) = unpack('S n a4 x8', $address);
-  $cHost=join('.',unpack('C4', $cAdd)),time-$start{$cHost};
-
-    # do something with CLIENT
-  $next=1;
-  $lines=0;
-  $input=<CLIENT>;
-  $next=0 if $input=~/^DONE/;
-  if ($sent{$cHost}>0 && $next==0){
-    print ERROR "no report for $sent{$cHost}:$headers{$cHost} from $cHost\n" if defined $sent{$cHost};
-    print "no report for $sent{$cHost}:$headers{$cHost} from $cHost\n" if defined $sent{$cHost};
-  }
-  while($next eq 1){
-    if ($input=~/^DONE$/){
-      $next=0;
-      printf PROGRESS "%d:%s:%d:%s:%d:%d\n", $sent{$cHost}, $cHost,time-$start{$cHost},$headers{$cHost},$lines,time;
-      printf "seq:%-8d\ts:%15s host:%-16s\ttime:%-4d s\tlines: %d\n", $sent{$cHost}, $headers{$cHost},$cHost,time-$start{$cHost},$lines;
-    }
-    elsif ($input=~/^empty$/){
-      print ERROR "empty:$sent{$cHost}:$headers{$cHost}:$cHost\n" if defined $sent{$cHost};
-      print "empty report for $sent{$cHost}:$headers{$cHost} from $cHost\n" if defined $sent{$cHost};
-    }
-    else{
-      print OUTPUT $input;
-      $lines++;
-    }
-    $input=<CLIENT>;
-  }
-  $next=1;
-  while($next eq 1){
-    print CLIENT $_;
-    $_=<>;
-    $next=0 if /^$/;
-  }
-  print CLIENT $_;
-  close CLIENT;
-  $sent{$cHost}=$item;
-  $start{$cHost}=time;
-  $headers{$cHost}=$header;
-#  print "Sent: $item:$header to $cHost\n";
-  $item++;
-}
-
-$remaining=length keys %sent;
-print "Remaining $remaining\n";
 while ($remaining){
   $address=accept(CLIENT, SERVER);
+  next unless $address;
   ($cDomain, $cPort, $cAdd) = unpack('S n a4 x8', $address);
-  $cHost=join('.',unpack('C4', $cAdd)),time-$start{$cHost};
-  $next=1;
-  $input=<CLIENT>;
-  $next=0 if $input=~/^DONE/;
-  $lines=0;
-  while($next eq 1){
-    $input=<CLIENT>;
-    if ($input=~/^DONE$/){
-      $next=0;
+  $cHost=join('.',unpack('C4', $cAdd));
+
+  $got_response=0;
+  $send_query=0;
+  $ident="noid";
+# Read from client
+#
+  while(<CLIENT>){
+    if (/^RESULTS /){
+      $lines=0;
+      ($COMMAND,$seq)=split;
+      chomp $seq;
+      while(! $got_response){
+        $_=<CLIENT>;
+        if (/^DONE$/){
+          if (defined $start{$seq}){
+            printf PROGRESS "%s:%s:%d:%d:%d\n", 
+		$seq,$ident,time-$start{$seq},
+		$lines,time;
+            printf "%-8d seq:%25s host:%-16s  time:%-4ds lines: %d\n", 
+		$processed, $seq,$ident,
+		time-$start{$seq},$lines;
+            delete $start{$seq};
+            $processed++;
+          }
+          else{
+            print stderr "Unexpect report from $cHost:$ident for $seq\n";
+          }
+          print CLIENT "RECEIVED $seq\n";
+          $got_response=1;
+        }
+        else{ 
+          print OUTPUT;
+          $lines++;
+        }
+        $got_response=1 unless $_;  # catch the edge case
+      } # While for response
+    }   #
+    elsif (/^IDENT /){
+      ($COMMAND,$ident)=split;
     }
-    elsif ($input=~/^empty$/){
-      print ERROR "empty:$sent{$cHost}:$headers{$cHost}:$cHost\n" if defined $sent{$cHost};
-      print "empty report for $sent{$cHost}:$headers{$cHost} from $cHost\n" if defined $sent{$cHost};
+    elsif (/^NEXT$/){
+      $send_query=1;
     }
     else{
-      print OUTPUT $input;
-      $lines++;
+      print stderr "Recieved unusual response from $cHost: $_";
     }
-    $next=0 unless $input;
   }
-  printf PROGRESS "%d:%s:%d:%s:%d\n", $sent{$cHost}, $cHost,time-$start{$cHost},$headers{$cHost},$lines;
-  printf "seq:%-8d\ts:%15s host:%-16s\ttime:%-4d s\tlines: %d\n", $sent{$cHost}, $headers{$cHost},$cHost,time-$start{$cHost},$lines;
-  $remaining--;
+#
+# Were we expecting a response but didn't get one?
+#
+#  if ($sent{$seq}>0 && ! $got_response){
+#    print ERROR "no report for $seq{$cHost}:$headers{$cHost} from $cHost\n" if defined $sent{$cHost};
+#    print "no report for $sent{$cHost}:$headers{$cHost} from $cHost\n" if defined $sent{$cHost};
+#  }
+#
+# Do we need to send a query?  Make sure we aren't in a shutdown.
+#
+  if ($send_query && ! $shutdown){
+    $next=1;
+    $header=0;
+    while($next eq 1){
+      last if eof(stdin);
+      $_=<>;
+      ($bl,$header,$rest)=split /[> ]/ unless $header;
+      print CLIENT $_;
+      $next=0 if /^$/;
+    }
+    $start{$header}=time if $header ne 0;
+    print "Sent: $item:$header to $cHost:$ident\n";
+    $item++;
+  }
   close CLIENT;
+  if ( eof(stdin) || $shutdown){
+    $shutdown=1;
+    $remaining=keys %start;
+    print "Draining: $remaining remaining connections\n";
+  }
 }
-
 
 close PRROGRESS;
 close OUTPUT;
@@ -110,10 +120,20 @@ close SERVER ;
 
 sub catch_int {
   my $signame = shift;
-  close PRROGRESS;
-  close OUTPUT;
-  close ERROR;
-  close SERVER ;
-  close PROGRESS;
-  die "Somebody sent me a SIG$signame";
+  if ($shutdown){
+    close PRROGRESS;
+    close OUTPUT;
+    close ERROR;
+    close SERVER ;
+    close PROGRESS;
+    print "Exiting\n";
+    exit;
+  }
+  else{
+    $shutdown=1;
+    $remaining=keys %sent;
+    print "Shutting down\n";
+    print "Draining: $remaining remaining connections\n";
+  }
 }
+

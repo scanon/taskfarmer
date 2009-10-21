@@ -10,27 +10,27 @@ DB=refGenomes.faa
 
 # Cleanup any stale stuff
 rm -rf /tmp/genomes
-rm -rf /tmp/genome
 
 mkdir $TMPDIR
 cd $TMPDIR
 export LD_LIBRARY_PATH=/scratch/scratchdirs/canon/software/lib/
+i=$(date +%s)
+let i=i+700
 
-function shutdown {
-  touch shutdown
+function fshutdown {
+  echo "Shutting down"
+  echo "" > shutdown
 }
 
 function cleanup {
-#  echo "Called cleanup"
+  echo "Called cleanup"
   cd /tmp
   rm -rf $TMPDIR
   exit
 }
 trap cleanup 2 15
-trap shutdown 32
+#trap fshutdown 17
 
-let i=RANDOM/3000
-#sleep $i
 
 #
 #
@@ -39,21 +39,41 @@ if [ ! -e $TMPDIR/$DB.pal ] ;then
   cp $BASE/bin/* $TMPDIR/
 fi
 
-echo "DONE"|netcat $SERVER $PORT > query
+while [ $(date +%s) -lt $i ] ; do
+  sleep 1
+done
+
+
+ID="frank-$(cat /proc/cray_xt/nid)"
+
+
+(echo "IDENT $ID";echo "NEXT")|netcat $SERVER $PORT > query
 while [ -s ./query ] ; do
+   header=$(grep '^>' query|sed 's/>//'|sed 's/ .*//' )
    cat query|blastall -p blastp -d ./$DB \
     -F 'm S' -e 1e-2 -b 2000 -z 700000000 \
     -m 8 -o output -a 4 2>&1 |grep -v Selenocysteine
 #   cat query
 #sleep 1
   cat error*
-  if [ ! -s ./output ] ; then
-    echo "empty" > output
-  fi
+  echo "IDENT $ID" > message
+  echo "RESULTS $header" >> message
+  cat output >> message
+  echo "DONE" >> message
   if [ -e shutdown ] ; then
-    (cat output;echo "DONE")|netcat $SERVER $PORT > query
+    echo "Shutting down"
+    (cat message)|netcat $SERVER $PORT > response
+    cleanup
   else
-    (cat output;echo "DONE")|netcat $SERVER $PORT > query
+    (cat message;echo "NEXT")| netcat $SERVER $PORT > response
+  fi
+  rm query
+  if [ $(grep -c RECEIVED response) -gt 0 ]; then
+    grep -v RECEIVED response  > query
+  else
+    echo "Not sure if the response was recieved"
+    cat response
+    grep -v RECEIVED response  > query
   fi
 done
 
