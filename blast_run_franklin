@@ -13,10 +13,8 @@ cd $TMPDIR
 export LD_LIBRARY_PATH=/scratch/scratchdirs/canon/software/lib/
 export PERLLIB=$PERL/site_perl/5.8.8/:$PERL/5.8.8/:$PERL/5.8.8/x86_64-linux-thread-multi
 
-function fshutdown {
-  echo "Shutting down"
-  echo "" > shutdown
-}
+ulimit -m 1048576
+
 
 function cleanup {
   echo "Called cleanup"
@@ -33,19 +31,28 @@ let i=RANDOM/3000
 #
 #
 if [ ! -e $TMPDIR/$DB.pal ] ;then
-  cp $DBDIR/$DB.* $TMPDIR/
-  cp $BASE/bin/* $TMPDIR/
+#  cp $DBDIR/$DB.* $TMPDIR/
+#  cp $BASE/bin/* $TMPDIR/
+  let i=$(cat /proc/cray_xt/nid )%2
+  if [ $i -eq 0 ] ; then
+    DBDIR=/scratch/scratchdirs/canon/jgi/nr/
+  fi
+
+  ln -s $DBDIR/$DB* $TMPDIR/
+  ln -s $BASE/bin/* $TMPDIR/
 fi
 
 eval "$IDCOMMAND"
 
-(echo "IDENT $ID";echo "NEXT")|netcat $SERVER $PORT > query
-while [ -s ./query ] ; do
-   header=$(grep '^>' query|tail -1|sed 's/>//'|sed 's/ .*//' )
-   cat query|blastall -d ./$DB -F 'm S' -o output2 $BLASTOPTS   2>&1
-#  ./blast2m8.pl -i output -o output2
+(echo "IDENT $ID";echo "NEXT")|netcat $SERVER $PORT > rmess
+while [ -s ./rmess ] ; do
+   STEP=$(grep 'STEP' rmess|sed 's/STEP: //')
+   cat rmess|grep -v STEP > query
+   cat query|blastall -d ./$DB -o output $BLASTOPTS   2>&1
+  ./blast2m8.pl -a -i output -o output2
+#  /project/projectdirs/genomes/runs/cs.batch/run_pipeline
   echo "IDENT $ID" > message
-  echo "RESULTS $header" >> message
+  echo "RESULTS $STEP" >> message
   cat output2 >> message
   echo "DONE" >> message
   if [ ! -e shutdown ] ; then
@@ -56,7 +63,7 @@ while [ -s ./query ] ; do
  retry=10
  (cat message)|netcat -w $TIMEOUT $SERVER $PORT > response
   while [ $retry -gt 0 ] && [ $(grep -c RECEIVED response) -eq 0 ] ; do
-    echo "Retrying"
+    echo "Retrying $retry"
     (cat message)|netcat -w $TIMEOUT $SERVER $PORT > response
     let retry=retry-1
   done
@@ -67,7 +74,9 @@ while [ -s ./query ] ; do
   fi
 #
   rm query
-  grep -v RECEIVED response  > query
+  rm rmess
+  rm output
+  grep -v RECEIVED response  > rmess
 done
 
 cleanup

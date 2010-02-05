@@ -1,137 +1,97 @@
 #!/usr/bin/perl
 
 use Socket;
+use IO::Handle;
+use IO::Socket::INET;
+use strict;
 
-my $server_port=4999;
-my $BATCHSIZE=16;
+
+# Parameters
+#
+my $SERVERPORT=4999;
+my $BATCHSIZE=32;
+my $CHUNKSIZE=32;
+my $TIMEOUT=5;
+my $MAXRETRY=2;
+my $MAXBUFF=8*1024*1024;  # 10M buffer
+my $FLUSHTIME=60;
+my $FR_FILE="fastrecovery";
+
+#  Global vars
+#
+my $next_header;
+my $output_buffer='';
+my $progress_buffer='';
+my %sequence;
+my %job;
+my @ondeck;
+my @retrylist;
+my @failed;
+my $item;
+my $offset;
+my $index;
+my $next_flush=time+$FLUSHTIME;
+my $next_check=time+$TIMEOUT;
+my $processed=0;
+
+open(INPUT,$ARGV[0]) or die "Unable to open input file ($ARGV[0])\n";
+
+fast_recovery($FR_FILE);
 
 # make the socket
-socket(SERVER, PF_INET, SOCK_STREAM, getprotobyname('tcp'));
+my $sock=new IO::Socket::INET->new(LocalPort=>$SERVERPORT,
+	Proto=>'tcp',  Timeout => 2,
+         Listen => 1, Reuse => 1
+        ) or die "Unable to create socket\n";
 
-# so we can restart our server quickly
-setsockopt(SERVER, SOL_SOCKET, SO_REUSEADDR, 1);
 
-# build up my socket address
-my $my_addr = sockaddr_in($server_port, INADDR_ANY);
-bind(SERVER, $my_addr)
-    or die "Couldn't bind to port $server_port : $!\n";
+my $item=0;
+my $remaining=1;
+my $shutdown=0;
+my $ident;
+my $command;
 
-# establish a queue for incoming connections
-listen(SERVER, SOMAXCONN)
-    or die "Couldn't listen on port $server_port : $!\n";
-
-# accept and process connections
-$item=0;
-$remaining=1;
-$shutdown=0;
 open(PROGRESS,">> ./progress");
 open(OUTPUT,">> ./final.output");
 open(ERROR,">> ./error.output");
 $SIG{INT} = \&catch_int;  # best strategy
-$input=<stdin>;
-while ($remaining){
-  $address=accept(CLIENT, SERVER);
-  next unless $address;
-  ($cDomain, $cPort, $cAdd) = unpack('S n a4 x8', $address);
-  $cHost=join('.',unpack('C4', $cAdd));
-#  print "Connect from $cHost\n";
 
-  $got_response=0;
-  $send_query=0;
-  $ident="noid";
-# Read from client
-#
-  while(<CLIENT>){
-# print $_;
-    if (/^RESULTS /){
-      $lines=0;
-      ($COMMAND,$seq)=split;
-      chomp $seq;
-      while(! $got_response){
-        $_=<CLIENT>;
-        if (/^DONE$/){
-          if (defined $job{$seq}){
-            $sequences=join ",",@{$job{$seq}->{list}};
-            printf PROGRESS "%s %s %d %d %d %d\n", 
-		$sequences,$ident,time-$job{$seq}->{start},
-		$lines,time,$job{$seq}->{len};
-            printf "%-8d seq:%25s host:%-16s  time:%-4ds lines: %d\n", 
-		$processed, $sequences,$ident,
-		time-$job{$seq}->{start},$lines;
-            $processed+=$job{$seq}->{count};
-            delete $job{$seq};
-          }
-          else{
-            print stderr "Unexpect report from $cHost:$ident for $seq\n";
-          }
-          print CLIENT "RECEIVED $seq\n";
-          $got_response=1;
-        }
-        else{ 
-          print OUTPUT;
-          $lines++;
-        }
-        $got_response=1 unless $_;  # catch the edge case
-      } # While for response
-    }   #
-    elsif (/^IDENT /){
-      ($COMMAND,$ident)=split;
-    }
-    elsif (/^NEXT$/){
-      $send_query=1;
-    }
-    else{
-      print stderr "Recieved unusual response from $cHost: $_";
-    }
-  }
-#
+# This is the main work loop.
+while ($remaining){
+  my $new_sock=$sock->accept();
+  if (defined $new_sock){
+    my $clientaddr=$new_sock->peerhost();
+
+    my $send_query=do_request($new_sock);
+
 #
 # Do we need to send a query?  Make sure we aren't in a shutdown.
 #
-  if ($send_query && $shutdown==0){
-    $next=1;
-    $header=0;
-    $length=0;
-    $batch=0;
-    $sent=[];
-    while($next eq 1){
-      last if ($input=~/^>/ && $batch==$BATCHSIZE);      
-      last if eof(stdin);
-      $input=~s/\r//;
-      print CLIENT $input;
-      $length+=length $input;
-      if ($input=~/^>/){
-        ($bl,$header,$rest)=split /[> \r\n]/,$input;
-        push @{$sent}, $header;
-        $batch++;
-      }
-      $input=<stdin>;
-    }
-    if ($header ne 0){
-      $job{$header}->{start}=time;
-      $job{$header}->{len}=$length;
-      $job{$header}->{list}=$sent; 
-      $job{$header}->{count}=$batch; 
-    }
-    print "Sent: $item:$header to $cHost:$ident:$length\n";
-    $item++;
+    send_query($new_sock) if ($send_query && $shutdown==0);
+    close $new_sock;
   }
-  close CLIENT;
-  if ( eof(stdin) || $shutdown){
-    $shutdown=1;
-    $remaining=keys %job;
+#  print "Remaining jobs ".join(" ",keys %job)."\n";    
+  check_timeouts() if (time>$next_check);
+  flush_output() if (time>$next_flush || length $output_buffer > $MAXBUFF);
+  if ( eof(INPUT) || $shutdown){
+    $shutdown=1;                      # In case eof got us here.
+    $remaining=keys %job;             # How much pending stuff is there?
     print "Draining: $remaining remaining connections\n";
   }
 }
 
+flush_output();
 close PRROGRESS;
 close OUTPUT;
 close ERROR;
 close SERVER ;
 
+# Interrupt handler
+#
 sub catch_int {
   my $signame = shift;
   if ($shutdown){
+    flush_output();
     close PRROGRESS;
     close OUTPUT;
     close ERROR;
@@ -142,9 +102,335 @@ sub catch_int {
   }
   else{
     $shutdown=1;
-    $remaining=keys %sent;
+    flush_output();
+    $remaining=keys %job;
     print "Shutting down\n";
     print "Draining: $remaining remaining connections\n";
   }
 }
 
+sub do_request{
+  my $new_sock=shift;
+  my $clientaddr=$new_sock->peerhost();
+
+#  print "Connect from $clientaddr\n";
+
+  my $got_response=0;
+  my $send_query=0;
+  $ident="noid";
+# Read from client.  Process requests and reponse.
+#
+  while(<$new_sock>){
+# print $_;
+    if (/^RESULTS /){
+      my ($command,$jstep)=split;
+      chomp $jstep;
+      my $lines=0;
+      while(! $got_response){
+        $_=<$new_sock>;
+        if (/^DONE$/){
+          if (defined $job{$jstep}){
+            $job{$jstep}->{lines}=$lines;
+          }
+          print $new_sock "RECEIVED $jstep\n";
+          my $status=process_results($jstep);
+          print stderr "Unexpected report from $clientaddr:$ident for $jstep\n" if $status eq 0;
+          $got_response=1;
+        }
+        else{
+          $output_buffer.=$_;
+          $lines++;
+        }
+        $got_response=1 unless $_;  # catch the edge case
+      } # While for response
+    }   #
+    elsif (/^IDENT /){
+      ($command,$ident)=split;
+    }
+    elsif (/^NEXT$/){
+      $send_query=1;
+    }
+    elsif (/^MESSAGE /){
+      chomp; 
+      s/MESSAGE //;
+      print stderr "MESSAGE: $_\n";
+    }
+    elsif (/^ERROR /){
+      my ($command,$jstep)=split;
+      print stderr "ERROR: Job step $jstep\n";
+      print ERROR "ERROR: Job step $jstep\n";
+      requeue_job($jstep);
+    }
+    else{
+      print stderr "Recieved unusual response from $clientaddr: $_";
+    }
+  }
+
+  return $send_query;
+
+}
+
+# Process results from client.
+# Add line to progress buffer.
+# Cleanup data structures.
+# (This doesn't actually spool the output)
+#
+sub process_results{
+  my $jstep=shift;
+
+  if (defined ($job{$jstep})){
+    my $sequences=join ",",@{$job{$jstep}->{list}};
+    $progress_buffer.=sprintf "%s %s %d %d %d %d\n", 
+	$sequences,$ident,time-$job{$jstep}->{start},
+	$job{$jstep}->{lines},time,$job{$jstep}->{len};
+    printf "Recv: %d seq:%25s hostid:%-10s  time:%-4ds lines: %-6d proc: %d\n", 
+	$jstep, substr($sequences,0,25),$ident,
+	time-$job{$jstep}->{start},$job{$jstep}->{lines},$processed;
+    foreach my $seqid (@{$job{$jstep}->{list}}){
+      delete $sequence{$seqid};
+    }
+    $processed+=$job{$jstep}->{count};
+    delete $job{$jstep};
+    return 1;
+  }
+  else{
+    return 0;
+  }
+}
+
+sub send_query{
+  my $new_sock=shift;
+
+  my $sent=[];
+  my $length;
+  my $ct=0;
+  my @list=build_list($BATCHSIZE);
+
+# Send the list if there is one.
+#
+  if (scalar @list > 0){
+    print $new_sock "STEP: $item\n";
+    foreach my $seq (@list){
+      print $new_sock $sequence{$seq}->{sequence};
+      push @{$sent}, $seq;
+      $length+=length $sequence{$seq}->{sequence};
+      $ct++;
+    }
+# Save info about the job step.
+#
+    $job{$item}->{start}=time;
+    $job{$item}->{len}=$length;
+    $job{$item}->{list}=$sent; 
+    $job{$item}->{count}=$ct; 
+    print "Sent: $item hostid:$ident length:$length\n";
+    $item++;
+  }
+}
+
+# Flush output, progress, and create fast_recovery file
+# This tries to keep everything in a consistent state.
+#
+sub flush_output{
+  print OUTPUT $output_buffer; 
+  print PROGRESS $progress_buffer; 
+  flush OUTPUT;
+  flush PROGRESS;
+
+  printf "Flushed %ld bytes\n",length $output_buffer;
+  $output_buffer='';
+  $progress_buffer='';
+
+  my $ct=write_fastrecovery($FR_FILE);
+  printf "Wrote fast recovery (%d items)\n", $ct;
+  $next_flush=time+$FLUSHTIME;
+}
+
+#
+# This builds up a work list of args sequences.
+# It first will look at anything on retrylist then
+# go to the ondeck queue.
+#
+sub build_list{
+  my $batchsize=shift;
+  my @list;
+  my $ct=0;
+
+
+# Check retry stack
+#
+  while ($ct<$batchsize && scalar @retrylist >0){
+    push @list,shift @retrylist;
+    $ct++;
+  }
+
+# Build rest from ondeck
+#
+  if (scalar @ondeck < ($batchsize-$ct)){
+    read_input($CHUNKSIZE);
+  }
+  while ($ct<$batchsize){
+    push @list,shift @ondeck;
+    $ct++;
+  }
+  return @list;
+}
+
+# Look for old inflight messages.
+# Move to retry queue
+#
+sub check_timeouts{
+  my $time=time-$TIMEOUT;
+  foreach my $jstep (keys %job){
+    if ($job{$jstep}->{start}<$time){
+      print "RETRY: $jstep timed out.  Adding to retry.\n";
+      requeue_job($jstep);
+    }
+  }
+  $next_check=time+$TIMEOUT/2;
+}
+
+# Take sequences for job step
+# and put back on the queue.
+#
+sub requeue_job{
+  my $jstep=shift;
+
+  foreach my $seqid (@{$job{$jstep}->{list}}){
+    $sequence{$seqid}->{retry}++;
+    if ($sequence{$seqid}->{retry} < $MAXRETRY){
+      push @retrylist,$seqid;
+    }
+    else{
+      print stderr "MAX:  $seqid hit max retries\n";
+      print ERROR "FAILED: $seqid hit max retries\n";
+      push @failed,$seqid;
+    }
+  }
+  delete $job{$jstep};
+}
+
+#
+# Read in $read number of sequences
+# Store sequence and push header onto ondeck stack
+#
+sub read_input{
+  my $read=shift;
+  my $ct=0;
+
+  if (! defined $next_header){
+    $_=<INPUT>;
+    die "Bad start: $_\n" unless /^>/;
+    my ($bl,$header,$rest)=split /[> \r\n]/;
+    $next_header=$header;
+    $sequence{$next_header}->{sequence}=$_;
+    $sequence{$next_header}->{retry}=0;
+  }
+
+  while ($ct<$read && !eof(INPUT)){
+    $_=<INPUT>;
+    while(! /^>/ ){
+       $sequence{$next_header}->{sequence}.=$_;
+       $_=<INPUT>;
+       last if eof(INPUT);
+    }
+    push @ondeck, $next_header;
+    $ct++;
+    my ($bl,$header,$rest)=split /[> \r\n]/;
+    $next_header=$header;
+    $sequence{$next_header}->{sequence}=$_;
+    $sequence{$next_header}->{retry}=0;
+  }
+  $index+=$ct;
+#  print "Read $ct sequences from input.  Size of sequence " . scalar( keys %sequence) . "\n";
+  return $ct;
+}
+
+#
+# Read fast recovery file
+# Figure out where we were in the input stream.
+# Requeue any outstanding work.
+#
+sub fast_recovery{
+  my $filename=shift; 
+  return unless ( -e $filename);
+  print "Recoverying using $filename\n";
+  open(FR,$filename) or die "Unable to open $filename\n";
+# Read the max index and offset
+#
+  $_=<FR>;
+  $_=~s/.*max: //;  
+  ($index,$offset)=split;
+  if (eof(FR)){
+    close FR;
+    seek INPUT,$offset,0;
+    return;
+  }
+
+  $_=<FR>;
+  die "Bad start: $_\n" unless /^>/;
+  my ($bl,$header,$rest)=split /[> \r\n]/;
+
+  while (!eof(FR)){
+    $sequence{$header}->{sequence}=$_;
+    $sequence{$header}->{retry}=0;
+    $_=<FR>;
+    while(! /^>/){
+       $sequence{$header}->{sequence}.=$_;
+       $_=<FR>;
+       last if eof(FR);
+    }
+    push @ondeck, $header;
+    ($bl,$header,$rest)=split /[> \r\n]/;
+  }
+  seek INPUT,$offset,0;
+  printf "Recovered %d sequences from $filename\n", scalar @ondeck;
+  close FR;
+}
+
+# Write the fastrecovery file.
+# The first line is the index number and the offset into the
+#   query file.
+# This is followed by a list of sequences that were in process
+# This list must include retries, pending jobs, and ondeck.
+# The last is needed because the file pointer has already moved past
+#   the ondeck list of sequences.
+#
+sub write_fastrecovery{
+  my $filename=shift;
+  open(FR,"> $filename.new");
+  printf FR "# max: %ld %ld\n",$index,tell(INPUT)-length($sequence{$next_header}->{sequence});
+  my $seqid;
+  my $ct=0;
+
+# Print out anything on retry queue
+  foreach my $seqid (@retrylist){
+    die "Bad sequence $seqid\n" unless $sequence{$seqid}->{sequence}=~/^>/;
+    print FR $sequence{$seqid}->{sequence};
+    $ct++;
+  }
+ 
+# Print out any pending jobs
+# 
+  foreach my $jstep (keys %job){
+    foreach $seqid (@{$job{$jstep}->{list}}){
+      die "Bad sequence $seqid\n" unless $sequence{$seqid}->{sequence}=~/^>/;
+      print FR $sequence{$seqid}->{sequence};
+      $ct++;
+    }
+  }
+
+# Print out anything in the ondeck circle
+  foreach my $seqid (@ondeck){
+    die "Bad sequence $seqid\n" unless $sequence{$seqid}->{sequence}=~/^>/;
+    print FR $sequence{$seqid}->{sequence};
+    $ct++;
+  }
+  close FR;
+
+# Try to safely move the file in place.
+#
+  unlink $filename;
+  link $filename.".new", $filename or die "Unable to move $filename.new\n";
+  unlink $filename.".new";
+  return $ct;
+}
