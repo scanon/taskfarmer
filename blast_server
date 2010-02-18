@@ -11,10 +11,10 @@ use strict;
 my $SERVERPORT=4999;
 my $BATCHSIZE=32;
 my $CHUNKSIZE=32;
-my $TIMEOUT=5;
-my $MAXRETRY=2;
-my $MAXBUFF=8*1024*1024;  # 10M buffer
-my $FLUSHTIME=60;
+my $TIMEOUT=1200;
+my $MAXRETRY=5;
+my $MAXBUFF=100*1024*1024;  # 10M buffer
+my $FLUSHTIME=120;
 my $FR_FILE="fastrecovery";
 
 #  Global vars
@@ -40,8 +40,8 @@ fast_recovery($FR_FILE);
 
 # make the socket
 my $sock=new IO::Socket::INET->new(LocalPort=>$SERVERPORT,
-	Proto=>'tcp',  Timeout => 2,
-         Listen => 1, Reuse => 1
+	Proto=>'tcp',  Timeout => 45,
+         Listen => 200, Reuse => 1
         ) or die "Unable to create socket\n";
 
 
@@ -80,11 +80,13 @@ while ($remaining){
   }
 }
 
+print "Doing final flush\n";
 flush_output();
 close PRROGRESS;
 close OUTPUT;
 close ERROR;
 close SERVER ;
+print "All done\n";
 
 # Interrupt handler
 #
@@ -268,7 +270,7 @@ sub build_list{
   if (scalar @ondeck < ($batchsize-$ct)){
     read_input($CHUNKSIZE);
   }
-  while ($ct<$batchsize){
+  while ($ct<$batchsize && scalar @ondeck >0){
     push @list,shift @ondeck;
     $ct++;
   }
@@ -317,8 +319,13 @@ sub read_input{
   my $read=shift;
   my $ct=0;
 
+  return 0 if eof(INPUT);
+
   if (! defined $next_header){
     $_=<INPUT>;
+    while (/^$/){
+      $_=<INPUT>;
+    }
     die "Bad start: $_\n" unless /^>/;
     my ($bl,$header,$rest)=split /[> \r\n]/;
     $next_header=$header;
@@ -333,12 +340,14 @@ sub read_input{
        $_=<INPUT>;
        last if eof(INPUT);
     }
-    push @ondeck, $next_header;
+    push @ondeck, $next_header if (defined $next_header && $next_header ne '');
     $ct++;
     my ($bl,$header,$rest)=split /[> \r\n]/;
     $next_header=$header;
-    $sequence{$next_header}->{sequence}=$_;
-    $sequence{$next_header}->{retry}=0;
+    if (defined $next_header){
+      $sequence{$next_header}->{sequence}=$_;
+      $sequence{$next_header}->{retry}=0;
+    }
   }
   $index+=$ct;
 #  print "Read $ct sequences from input.  Size of sequence " . scalar( keys %sequence) . "\n";
@@ -379,7 +388,7 @@ sub fast_recovery{
        $_=<FR>;
        last if eof(FR);
     }
-    push @ondeck, $header;
+    push @ondeck, $header if (defined $header && $header ne '');
     ($bl,$header,$rest)=split /[> \r\n]/;
   }
   seek INPUT,$offset,0;
@@ -404,7 +413,7 @@ sub write_fastrecovery{
 
 # Print out anything on retry queue
   foreach my $seqid (@retrylist){
-    die "Bad sequence $seqid\n" unless $sequence{$seqid}->{sequence}=~/^>/;
+    die "Bad sequence in retry $seqid\n\n$sequence{$seqid}->{sequence}\n" unless $sequence{$seqid}->{sequence}=~/^>/;
     print FR $sequence{$seqid}->{sequence};
     $ct++;
   }
@@ -413,7 +422,7 @@ sub write_fastrecovery{
 # 
   foreach my $jstep (keys %job){
     foreach $seqid (@{$job{$jstep}->{list}}){
-      die "Bad sequence $seqid\n" unless $sequence{$seqid}->{sequence}=~/^>/;
+      die "Bad sequence in pending $seqid\n\n$sequence{$seqid}->{sequence}\n\n" unless $sequence{$seqid}->{sequence}=~/^>/;
       print FR $sequence{$seqid}->{sequence};
       $ct++;
     }
@@ -421,7 +430,7 @@ sub write_fastrecovery{
 
 # Print out anything in the ondeck circle
   foreach my $seqid (@ondeck){
-    die "Bad sequence $seqid\n" unless $sequence{$seqid}->{sequence}=~/^>/;
+    die "Bad sequence in ondeck $seqid\n" unless $sequence{$seqid}->{sequence}=~/^>/;
     print FR $sequence{$seqid}->{sequence};
     $ct++;
   }
