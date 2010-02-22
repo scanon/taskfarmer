@@ -2,18 +2,23 @@
 SERVER=$1
 PORT=$2
 TIMEOUT=45
-PATH=$TMPDIR:$PATH:$BASE/bin
-PERL=/project/projectdirs/genomes/apps/lib/perl5
+TMPDIR=/tmp/$$
+PATH=$PATH:$BASE/bin
+PERL=$BASE/lib/perl5
+MFILE=message
+RFILE=rmess
+TMPRFILE=response
 
 # Cleanup any stale stuff
-rm -rf /tmp/genomes
+rm -rf $TMPDIR
 
+cd /tmp  
 mkdir $TMPDIR
 cd $TMPDIR
-export LD_LIBRARY_PATH=/scratch/scratchdirs/canon/software/lib/
+export LD_LIBRARY_PATH=$BASE/lib/
 export PERLLIB=$PERL/site_perl/5.8.8/:$PERL/5.8.8/:$PERL/5.8.8/x86_64-linux-thread-multi
 
-ulimit -m 1048576
+ulimit -m 2048000
 
 
 function cleanup {
@@ -23,49 +28,51 @@ function cleanup {
   exit
 }
 trap cleanup 2 15
-#trap fshutdown 17
-
-let i=RANDOM/3000
-#sleep $i
 
 #
 #
 if [ ! -e $TMPDIR/$DB.pal ] ;then
-#  cp $DBDIR/$DB.* $TMPDIR/
-#  cp $BASE/bin/* $TMPDIR/
   let i=$(cat /proc/cray_xt/nid )%2
-  if [ $i -eq 0 ] ; then
-    DBDIR=/scratch/scratchdirs/canon/jgi/nr/
-  fi
+#  if [ $i -eq 0 ] ; then
+#    DBDIR=/scratch/scratchdirs/canon/jgi/nr/
+#  fi
 
-  ln -s $DBDIR/$DB* $TMPDIR/
-  ln -s $BASE/bin/* $TMPDIR/
+#  ln -s $DBDIR/$DB.* $TMPDIR/
 fi
 
 eval "$IDCOMMAND"
 
-(echo "IDENT $ID";echo "NEXT")|netcat $SERVER $PORT > rmess
-while [ -s ./rmess ] ; do
-   STEP=$(grep 'STEP' rmess|sed 's/STEP: //')
-   cat rmess|grep -v STEP > query
-   cat query|blastall -d ./$DB -o output $BLASTOPTS   2>&1
-  ./blast2m8.pl -a -i output -o output2
-#  /project/projectdirs/genomes/runs/cs.batch/run_pipeline
-  echo "IDENT $ID" > message
-  echo "RESULTS $STEP" >> message
-  cat output2 >> message
-  echo "DONE" >> message
+DBDIR=$(echo $DBDIR|sed 's/\//\\\//g')
+BLASTOPTS=$(echo "ARGS"|netcat $SERVER $PORT|sed "s/-d /-d $DBDIR\//")
+
+(echo "IDENT $ID";echo "NEXT")|netcat $SERVER $PORT > $RFILE
+while [ -s ./$RFILE ] ; do
+  STEP=$(grep '^STEP:' $RFILE|sed 's/STEP: //')
+  cat $RFILE|grep -v '^STEP:' > query
+  cat query|blastall -o output $BLASTOPTS -a $THREADS 2>&1
+  RET=$?
+  rm $RFILE query
+  echo "IDENT $ID" > $MFILE
+  if [ $RET ] ; then
+    echo "RESULTS $STEP" >> $MFILE
+    cat output >> $MFILE
+    echo "DONE" >> $MFILE
+  else
+    echo "ERROR $STEP" >> $MFILE
+    sleep 1
+  fi
   if [ ! -e shutdown ] ; then
-    echo "NEXT" >> message 
+    echo "NEXT" >> $MFILE 
   fi
 
 # Send Message
  retry=10
- (cat message)|netcat -w $TIMEOUT $SERVER $PORT > response
-  while [ $retry -gt 0 ] && [ $(grep -c RECEIVED response) -eq 0 ] ; do
+ (cat $MFILE)|netcat -w $TIMEOUT $SERVER $PORT > $TMPRFILE
+  while [ $retry -gt 0 ] && [ $(grep -c RECEIVED $TMPRFILE) -eq 0 ] ; do
     echo "Retrying $retry"
-    (cat message)|netcat -w $TIMEOUT $SERVER $PORT > response
+    (cat $MFILE)|netcat -w $TIMEOUT $SERVER $PORT > $TMPRFILE
     let retry=retry-1
+    sleep 20
   done
 
   if [ -e shutdown ] || [ $retry -eq 0 ] ; then
@@ -73,10 +80,8 @@ while [ -s ./rmess ] ; do
     cleanup
   fi
 #
-  rm query
-  rm rmess
-  rm output
-  grep -v RECEIVED response  > rmess
+  grep -v RECEIVED $TMPRFILE  > $RFILE
+  rm output $MFILE $TMPRFILE
 done
 
 cleanup
