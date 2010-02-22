@@ -4,7 +4,13 @@ use Socket;
 use IO::Handle;
 use IO::Socket::INET;
 use strict;
+use Getopt::Long;
 
+my $input;
+my $output;
+
+Getopt::Long::Configure("pass_through");
+my $result = GetOptions ( "i=s" => \$input, "o=s" => \$output);
 
 # Parameters
 #
@@ -16,6 +22,12 @@ my $MAXRETRY=5;
 my $MAXBUFF=100*1024*1024;  # 10M buffer
 my $FLUSHTIME=120;
 my $FR_FILE="fastrecovery";
+my $ARGS;
+foreach (@ARGV){
+  $_="\'$_\'" if / /;
+  $ARGS.=" $_";
+}
+print "Passing args to client: $ARGS\n";
 
 #  Global vars
 #
@@ -34,7 +46,7 @@ my $next_flush=time+$FLUSHTIME;
 my $next_check=time+$TIMEOUT;
 my $processed=0;
 
-open(INPUT,$ARGV[0]) or die "Unable to open input file ($ARGV[0])\n";
+open(INPUT,$input) or die "Unable to open input file ($input)\n";
 
 fast_recovery($FR_FILE);
 
@@ -52,7 +64,7 @@ my $ident;
 my $command;
 
 open(PROGRESS,">> ./progress");
-open(OUTPUT,">> ./final.output");
+open(OUTPUT,">> $output");
 open(ERROR,">> ./error.output");
 $SIG{INT} = \&catch_int;  # best strategy
 
@@ -78,6 +90,10 @@ while ($remaining){
     $remaining=keys %job;             # How much pending stuff is there?
     print "Draining: $remaining remaining connections\n";
   }
+}
+
+foreach my $seq (@ondeck){
+  print "bad seq in ondeck: $seq\n" if (!defined $seq || $seq eq '^$');
 }
 
 print "Doing final flush\n";
@@ -152,6 +168,9 @@ sub do_request{
     elsif (/^NEXT$/){
       $send_query=1;
     }
+    elsif (/^ARGS$/){
+      print $new_sock $ARGS;
+    }
     elsif (/^MESSAGE /){
       chomp; 
       s/MESSAGE //;
@@ -161,6 +180,7 @@ sub do_request{
       my ($command,$jstep)=split;
       print stderr "ERROR: Job step $jstep\n";
       print ERROR "ERROR: Job step $jstep\n";
+      print $new_sock "RECEIVED $jstep\n";
       requeue_job($jstep);
     }
     else{

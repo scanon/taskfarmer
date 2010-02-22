@@ -7,6 +7,8 @@ $pProg=0;
 $pInput=0;
 $rindex=0;
 
+$EXPECT_REPEATS=0;
+
 open(PROG,$ARGV[0]);
 open(INPUT,$ARGV[1]);
 
@@ -20,6 +22,7 @@ while(!eof(PROG)){
     $sum+=$time;
     foreach $seq (@list){
 #      print "Prog: :$seq:\n";
+      next if defined $completed{$seq};
       while(!defined $iheaders{$seq}){
         printf "read %d from input\n",$rct+=read_input($CHUNKSIZE);
         printf "Completed %d (max: %d hash size i:%d\n", $completed,$max, scalar keys %iheaders;
@@ -30,9 +33,11 @@ while(!eof(PROG)){
 	$maxoffset=$offsets[$index];
 #        print "New max $max $seq\n";
       }
+      $completed++;
       delete $offsets[$index];
       delete $reverse{$index};
       delete $iheaders{$seq};
+      $completed{$seq}=1 if $EXPECT_REPEATS;
     }
 }
 close PROG;
