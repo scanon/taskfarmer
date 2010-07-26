@@ -10,8 +10,9 @@ TMPDIR=/tmp/$USER
 
 # Source any setup files that are needed for the system.
 #
-if [ -x $TF_HOME/conf/$NERSC_HOST.stage ] ; then
-  . $TF_HOME/conf/$NERSC_HOST.stage
+TF_CONFDIR=$TF_HOME/share/taskfarmer/
+if [ -x $TF_CONFDIR/$NERSC_HOST.stage ] ; then
+  . $TF_CONFDIR/$NERSC_HOST.stage
 fi
 
 mkdir -p $TMPDIR

@@ -4,8 +4,8 @@ PREFIX := /usr
 NAME	= taskfarmer
 
 BINFILES=	tfrun
-LIBEXECFILES=	tf_worker tf_server
-SHAREFILES=	share/carver.conf  share/franklin.conf  share/franklin.stage
+LIBEXECFILES=	tf_worker tf_server tf_worker_thread
+SHAREFILES=	share/carver.conf  share/franklin.conf  share/franklin.stage share/test.conf
 EXAMPLEFILES=	examples/stage.sh examples/fix_perl_path.sh examples/sample.sh examples/pack.sh \
 		examples/blast.qsub examples/stage.cloud.sh examples/sample.qsub examples/run.cloud
 

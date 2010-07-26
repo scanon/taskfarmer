@@ -22,11 +22,14 @@ trap cleanup 2 15
 #
 if [ ! -e $TF_DIR ] ; then
   mkdir $TF_DIR
+else
+  rm $SOCKFILE $PIDFILE
 fi
 
 # Source the configuration file
-if [ -e $TF_HOME/conf/$NERSC_HOST.conf ] ; then
-  . $TF_HOME/conf/$NERSC_HOST.conf
+TF_CONFDIR=$TF_HOME/share/taskfarmer
+if [ -e $TF_CONFDIR/$NERSC_HOST.conf ] ; then
+  . $TF_CONFDIR/$NERSC_HOST.conf
 else
   echo "The Task Farmer is not currently supported on this system."
   exit
