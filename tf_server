@@ -17,15 +17,16 @@ $inputfile=~s/.*\///;
 
 # Parameters
 #
-my $SERVERPORT=4999;
 my $BATCHSIZE=32;
-my $CHUNKSIZE=64;
 my $TIMEOUT=1800;
 my $MAXRETRY=5;
-my $MAXBUFF=100*1024*1024;  # 10M buffer
+my $MAXBUFF=100*1024*1024;  # 100M buffer
 my $FLUSHTIME=120;
 my $FR_FILE="fastrecovery.$inputfile";
-my $ARGS;
+
+# Override defaults
+$BATCHSIZE=$ENV{BATCHSIZE} if defined $ENV{BATCHSIZE};
+$TIMEOUT=$ENV{SERVER_TIMEOUT} if defined $ENV{SERVER_TIMEOUT};
 
 #  Global vars
 #
@@ -44,12 +45,7 @@ my $next_flush=time+$FLUSHTIME;
 my $next_check=time+$TIMEOUT;
 my $processed=0;
 my $buffer_size=0;
-
-foreach (@ARGV){
-  $_="\'$_\'" if / /;
-  $ARGS.=" $_";
-}
-print "Passing args to client: $ARGS\n";
+my $chunksize=2*$BATCHSIZE;
 
 open(INPUT,$input) or die "Unable to open input file ($input)\n";
 
@@ -80,7 +76,10 @@ my $ident;
 my $command;
 
 open(PROGRESS,">> ./progress.$inputfile");
-open(ERROR,">> ./error.output");
+open(ERROR,">> ./error.$inputfile");
+open(LOG,">> ./log.$inputfile");
+select LOG; $|=1;
+select STDOUT;
 $SIG{INT} = \&catch_int;  # best strategy
 
 # This is the main work loop.
@@ -97,29 +96,29 @@ while ($remaining_jobs || $remaining_seq){
     send_query($new_sock) if ($send_query && ($shutdown==0 || $remaining_seq!=0) );
     close $new_sock;
   }
-#  print "Remaining jobs ".join(" ",keys %job)."\n";    
   check_timeouts() if (time>$next_check);
   flush_output() if (time>$next_flush || $buffer_size > $MAXBUFF);
   $remaining_seq=(scalar @ondeck + scalar @retrylist);
   if ( eof(INPUT) || $shutdown){
     $shutdown=1;                      # In case eof got us here.
     $remaining_jobs=keys %job;             # How much pending stuff is there?
-    print "Draining: $remaining_jobs remaining connections.  $remaining_seq remaining sequences\n";
+    print LOG "Draining: $remaining_jobs remaining connections.  $remaining_seq remaining sequences\n";
   }
 }
 
 foreach my $seq (@ondeck){
-  print "bad seq in ondeck: $seq\n" if (!defined $seq || $seq eq '^$');
+  print stderr "bad seq in ondeck: $seq\n" if (!defined $seq || $seq eq '^$');
 }
 
-print "Doing final flush\n";
+print LOG "Doing final flush\n";
 flush_output();
 foreach my $file (keys %output){
   $output{$file}->{handle}->close();
 }
+print LOG "All done\n";
 close PRROGRESS;
 close ERROR;
-print "All done\n";
+close LOG;
 
 # Interrupt handler
 #
@@ -130,18 +129,19 @@ sub catch_int {
     foreach my $file (keys %output){
       $output{$file}->{handle}->close();
     }
+    print LOG "Exiting\n";
     close PRROGRESS;
     close ERROR;
     close PROGRESS;
-    print "Exiting\n";
+    close LOG;
     exit;
   }
   else{
     $shutdown=1;
     flush_output();
     $remaining_jobs=keys %job;
-    print "Shutting down\n";
-    print "Draining: $remaining_jobs remaining connections\n";
+    print LOG "Shutting down on signal $signame\n";
+    print LOG "Draining: $remaining_jobs remaining connections\n";
   }
 }
 
@@ -178,9 +178,13 @@ sub do_request{
     }
     elsif (/^NEXT$/){
       $send_query=1;
+      last;
     }
     elsif (/^ARGS$/){
-      print $sock $ARGS;
+      foreach my $a (@ARGV){
+        print $sock "$a\n";
+      }
+      print $sock "DONE\n";
     }
     elsif (/^MESSAGE /){
       chomp; 
@@ -202,16 +206,25 @@ sub do_request{
   return $send_query;
 }
 
+# Read file output from client
+#
 sub read_file{
   my $sock=shift;
   $_=shift;
   my $clientaddr=$sock->peerhost();
   my $lines=0;
   my ($command,$file)=split;
-
   while(<$sock>){
      last if /^DONE$/;
-     $output{$file}->{buffer}.=$_;
+     if ( $file eq "stdout"){
+       print stdout $_;
+     }
+     elsif ( $file eq "stderr"){
+       print stderr $_;
+     }
+     else{
+       $output{$file}->{buffer}.=$_;
+     }
      $lines++;
   }
   $buffer_size+=length $output{$file}->{buffer};
@@ -231,7 +244,7 @@ sub process_results{
     $progress_buffer.=sprintf "%s %s %d %d %d %d\n", 
 	$sequences,$ident,time-$job{$jstep}->{start},
 	$job{$jstep}->{lines},time,$job{$jstep}->{len};
-    printf "Recv: %d seq:%25s hostid:%-10s  time:%-4ds lines: %-6d proc: %d\n", 
+    printf LOG "Recv: %d seq:%25s hostid:%-10s  time:%-4ds lines: %-6d proc: %d\n", 
 	$jstep, substr($sequences,0,25),$ident,
 	time-$job{$jstep}->{start},$job{$jstep}->{lines},$processed;
     foreach my $seqid (@{$job{$jstep}->{list}}){
@@ -270,7 +283,7 @@ sub send_query{
     $job{$item}->{len}=$length;
     $job{$item}->{list}=$sent; 
     $job{$item}->{count}=$ct; 
-    print "Sent: $item hostid:$ident length:$length\n";
+    print LOG "Sent: $item hostid:$ident length:$length\n";
     $item++;
   }
 }
@@ -282,12 +295,12 @@ sub flush_output{
 
   foreach my $file (keys %output){
     if ( ! defined $output{$file}->{handle}){
-      print "Opening new file $file\n";
+      print LOG "Opening new file $file\n";
       $output{$file}->{handle}=new IO::File ">> $file";
       die "Unable to open file $file\n" if ! defined $output{$file}->{handle};
     }
     my $handle=$output{$file}->{handle};
-    printf "Flushed %ld bytes to %s\n",length $output{$file}->{buffer},$file;
+    printf LOG "Flushed %ld bytes to %s\n",length $output{$file}->{buffer},$file;
     print {$handle} $output{$file}->{buffer};
     $handle->flush();
     $output{$file}->{buffer}='';
@@ -298,7 +311,7 @@ sub flush_output{
   $buffer_size=0;
 
   my $ct=write_fastrecovery($FR_FILE);
-  printf "Wrote fast recovery (%d items)\n", $ct;
+  printf LOG "Wrote fast recovery (%d items)\n", $ct;
   $next_flush=time+$FLUSHTIME;
 }
 
@@ -323,13 +336,12 @@ sub build_list{
 # Build rest from ondeck
 #
   if (scalar @ondeck < ($batchsize-$ct)){
-    read_input($CHUNKSIZE);
+    read_input($chunksize);
   }
   while ($ct<$batchsize && scalar @ondeck >0){
     push @list,shift @ondeck;
     $ct++;
   }
-#  print "Read $ct\n";
   return @list;
 }
 
@@ -340,7 +352,7 @@ sub check_timeouts{
   my $time=time-$TIMEOUT;
   foreach my $jstep (keys %job){
     if ($job{$jstep}->{start}<$time){
-      print "RETRY: $jstep timed out.  Adding to retry.\n";
+      print LOG "RETRY: $jstep timed out.  Adding to retry.\n";
       requeue_job($jstep);
     }
   }
@@ -406,7 +418,6 @@ sub read_input{
     }
   }
   $index+=$ct;
-#  print "Read $ct sequences from input.  Size of sequence " . scalar( keys %sequence) . "\n";
   return $ct;
 }
 
@@ -418,7 +429,7 @@ sub read_input{
 sub fast_recovery{
   my $filename=shift; 
   return unless ( -e $filename);
-  print "Recoverying using $filename\n";
+  print STDERR "Recoverying using $filename\n";
   open(FR,$filename) or die "Unable to open $filename\n";
 # Read the max index and offset
 #
@@ -448,7 +459,7 @@ sub fast_recovery{
     ($bl,$header,$rest)=split /[> \r\n]/;
   }
   seek INPUT,$offset,0;
-  printf "Recovered %d sequences from $filename\n", scalar @ondeck;
+  printf LOG "Recovered %d sequences from $filename\n", scalar @ondeck;
   close FR;
 }
 

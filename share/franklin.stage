@@ -1,0 +1,5 @@
+#!/bin/sh
+
+APP=/project/projectdirs/genomes/apps
+export PATH=$APP/bin:$PATH
+export LD_LIBRARY_PATH=$LD_LIBRARY_PATH:$APP/lib/

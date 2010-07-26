@@ -1,4 +1,4 @@
-#!/bin/ksh
+#!/bin/sh
 #
 # This is the standard run script that is executed on the compute node.
 # It fetches sequences from a server using netcat, runs some analysis, and pushes back results
@@ -6,89 +6,65 @@
 #
 SERVER=$1
 PORT=$2
-TIMEOUT=45
-TMPDIR=/tmp/$USER/$$
-MFILE=message
-RFILE=rmess
-TMPRFILE=response
-export STEP
+TMPDIR=/tmp/$USER
 
-. $STAGE
+# Source any setup files that are needed for the system.
+#
+if [ -x $TF_HOME/conf/$NERSC_HOST.stage ] ; then
+  . $TF_HOME/conf/$NERSC_HOST.stage
+fi
 
-# Set limit on physical memory
-ulimit -m 1536000
-# Set limit on virtual memory
-# ulimit -v 1536000
 mkdir -p $TMPDIR
 cd $TMPDIR
 
-function cleanup {
+# Source the staging file specified by the user if there is one.
+#
+if [ ! -z $STAGE ] && [ -x "$STAGE" ] ; then
+  . $STAGE
+fi
+
+# Change back into the temp dir just in case the
+# stager moved us around.
+#
+cd $TMPDIR
+
+# This will be called if an interupt is received.
+#
+cleanup() {
 #  echo "Called cleanup"
+  for pid in $PIDS ; do
+    if [ -d /proc/$pid ] ;then
+      kill $pid
+    fi
+  done
+  sleep 1
   cd /tmp
   rm -rf $TMPDIR
   CLEANUP=1
-  . $STAGE
+  if [ ! -z $STAGE_ONCE ] && [ -x "$STAGE_ONCE" ] ; then
+  . $STAGE_ONCE
+  fi
   exit
 }
+# Set the trap
 trap cleanup 2 15
 
-function catfiles {
-  for f in $(ls $GETFILES )
-  do
-    echo "FILE $f"
-    cat $f
-    echo "DONE"
-  done
-}
-
-let i=RANDOM/3000
-#sleep $i
-
-eval "$IDCOMMAND"
-
-export ARGS=$(echo "ARGS"|netcat $SERVER $PORT)
-
-export BASE=/tmp/$USER/img_gp_pipeline/NERSC
-(echo "IDENT $ID";echo "NEXT")|netcat $SERVER $PORT > $RFILE
-while [ -s ./$RFILE ] ; do
-# Run the pipeline wrapper script.
+# Determine the number of threads
 #
-  STEP=$(grep '^STEP:' $RFILE|sed 's/STEP: //')
-  cat $RFILE|grep -v '^STEP:' > query
-#  /project/projectdirs/genomes/apps/bin/strace -f -o $SCRATCH/st.out $BASE/run_pipeline
-  $BASE/run_pipeline
-  RET=$?
-  rm $RFILE query
-  echo "IDENT $ID" > $MFILE
-  if [ $RET -eq 0 ] ; then
-    echo "RESULTS $STEP" >> $MFILE
-    catfiles >> $MFILE
-    echo "DONE" >> $MFILE
-  else
-    echo "ERROR $STEP" >> $MFILE
-    sleep 1
-  fi
-  if [ ! -e shutdown ] ; then
-    echo "NEXT" >> $MFILE 
-  fi
-
-# Send Message
- retry=10
- (cat $MFILE)|netcat -w $TIMEOUT $SERVER $PORT > $TMPRFILE
-  while [ $retry -gt 0 ] && [ $(grep -c RECEIVED $TMPRFILE) -eq 0 ] ; do
-    echo "Retrying $retry"
-    (cat $MFILE)|netcat -w $TIMEOUT $SERVER $PORT > $TMPRFILE
-    let retry=retry-1
-  done
-
-  if [ -e shutdown ] || [ $retry -eq 0 ] ; then
-    echo "Shutting down"
-    cleanup
-  fi
+THREADS=$(grep -c processor /proc/cpuinfo)
 #
-  grep -v RECEIVED $TMPRFILE  > $RFILE
-  LIST=$(ls |grep -v "^$RFILE$")
-  rm $LIST
+# Run the IDCOMMAND
+eval $IDCOMMAND
+export BID=$ID
+for THREAD in $(seq $THREADS) ; do
+  export ID="$BID-$THREAD"
+  perl $TF_HOME/libexec/tf_worker_thread $SERVER $PORT $THREAD &
+  PIDS="$PIDS $!"
 done
 
+# Wait for all threads to exit before cleanup
+wait
+
+# Cleanup Cleanup everybody do their share
+#
 cleanup
