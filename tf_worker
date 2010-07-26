@@ -1,78 +1,81 @@
 #!/bin/ksh
+#
+# This is the standard run script that is executed on the compute node.
+# It fetches sequences from a server using netcat, runs some analysis, and pushes back results
+#
+#
 SERVER=$1
 PORT=$2
 TIMEOUT=45
-TMPDIR=/tmp/$$
-PATH=$PATH:$BASE/bin
-PERL=$BASE/lib/perl5
+TMPDIR=/tmp/$USER/$$
+PATH=$TMPDIR:$PATH:$BASE/bin
+PERL=/project/projectdirs/genomes/apps/lib/perl5
 MFILE=message
-RFILE=rmess
-TMPRFILE=response
+export STEP
 
-# Cleanup any stale stuff
-rm -rf $TMPDIR
-
-cd /tmp  
-mkdir $TMPDIR
-cd $TMPDIR
-export LD_LIBRARY_PATH=$BASE/lib/
+ulimit -m 1536000
+ulimit -M 1536000
+export LD_LIBRARY_PATH=/scratch/scratchdirs/canon/software/lib/
 export PERLLIB=$PERL/site_perl/5.8.8/:$PERL/5.8.8/:$PERL/5.8.8/x86_64-linux-thread-multi
+mkdir -p $TMPDIR
+cd $TMPDIR
 
-ulimit -m 2048000
-
+#$BASE/watch_mem &
 
 function cleanup {
-  echo "Called cleanup"
+#  echo "Called cleanup"
   cd /tmp
   rm -rf $TMPDIR
   exit
 }
 trap cleanup 2 15
 
-#
-#
-if [ ! -e $TMPDIR/$DB.pal ] ;then
-  let i=$(cat /proc/cray_xt/nid )%2
-#  if [ $i -eq 0 ] ; then
-#    DBDIR=/scratch/scratchdirs/canon/jgi/nr/
-#  fi
+function catfiles {
+  for f in $(ls *.tbl *.geneC* )
+  do
+    echo "FILE $f"
+    cat $f
+    echo "DONE"
+  done
+}
 
-#  ln -s $DBDIR/$DB.* $TMPDIR/
-fi
+let i=RANDOM/3000
+#sleep $i
 
 eval "$IDCOMMAND"
 
-DBDIR=$(echo $DBDIR|sed 's/\//\\\//g')
-BLASTOPTS=$(echo "ARGS"|netcat $SERVER $PORT|sed "s/-d /-d $DBDIR\//")
+export ARGS=$(echo "ARGS"|netcat $SERVER $PORT)
 
-(echo "IDENT $ID";echo "NEXT")|netcat $SERVER $PORT > $RFILE
-while [ -s ./$RFILE ] ; do
-  STEP=$(grep '^STEP:' $RFILE|sed 's/STEP: //')
-  cat $RFILE|grep -v '^STEP:' > query
-  cat query|blastall -o output $BLASTOPTS -a $THREADS 2>&1
+(echo "IDENT $ID";echo "NEXT")|netcat $SERVER $PORT > rmess
+while [ -s ./rmess ] ; do
+# Run the pipeline wrapper script.
+#
+  STEP=$(grep '^STEP:' rmess|sed 's/STEP: //')
+  cat rmess|grep -v '^STEP:' > query
+  $BASE/run_pipeline
   RET=$?
-  rm $RFILE query
+  rm rmess query
   echo "IDENT $ID" > $MFILE
-  if [ $RET ] ; then
+  if [ $RET -eq 0 ] ; then
     echo "RESULTS $STEP" >> $MFILE
-    cat output >> $MFILE
+    catfiles >> $MFILE
     echo "DONE" >> $MFILE
   else
     echo "ERROR $STEP" >> $MFILE
     sleep 1
   fi
+
   if [ ! -e shutdown ] ; then
     echo "NEXT" >> $MFILE 
   fi
 
 # Send Message
  retry=10
- (cat $MFILE)|netcat -w $TIMEOUT $SERVER $PORT > $TMPRFILE
-  while [ $retry -gt 0 ] && [ $(grep -c RECEIVED $TMPRFILE) -eq 0 ] ; do
+ (cat $MFILE)|netcat -w $TIMEOUT $SERVER $PORT > response
+  while [ $retry -gt 0 ] && [ $(grep -c RECEIVED response) -eq 0 ] ; do
     echo "Retrying $retry"
-    (cat $MFILE)|netcat -w $TIMEOUT $SERVER $PORT > $TMPRFILE
+    (cat $MFILE)|netcat -w $TIMEOUT $SERVER $PORT > response
     let retry=retry-1
-    sleep 20
   done
 
   if [ -e shutdown ] || [ $retry -eq 0 ] ; then
@@ -80,8 +83,7 @@ while [ -s ./$RFILE ] ; do
     cleanup
   fi
 #
-  grep -v RECEIVED $TMPRFILE  > $RFILE
-  rm output $MFILE $TMPRFILE
+  grep -v RECEIVED response  > rmess
 done
 
 cleanup

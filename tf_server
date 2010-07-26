@@ -2,39 +2,37 @@
 
 use Socket;
 use IO::Handle;
+use IO::File;
 use IO::Socket::INET;
 use strict;
 use Getopt::Long;
 
 my $input;
-my $output;
 
 Getopt::Long::Configure("pass_through");
-my $result = GetOptions ( "i=s" => \$input, "o=s" => \$output);
+my $result = GetOptions ( "i=s" => \$input);
+
+my $inputfile=$input;
+$inputfile=~s/.*\///;
 
 # Parameters
 #
 my $SERVERPORT=4999;
 my $BATCHSIZE=32;
-my $CHUNKSIZE=32;
-my $TIMEOUT=1200;
+my $CHUNKSIZE=64;
+my $TIMEOUT=1800;
 my $MAXRETRY=5;
 my $MAXBUFF=100*1024*1024;  # 10M buffer
 my $FLUSHTIME=120;
-my $FR_FILE="fastrecovery";
+my $FR_FILE="fastrecovery.$inputfile";
 my $ARGS;
-foreach (@ARGV){
-  $_="\'$_\'" if / /;
-  $ARGS.=" $_";
-}
-print "Passing args to client: $ARGS\n";
 
 #  Global vars
 #
 my $next_header;
-my $output_buffer='';
 my $progress_buffer='';
 my %sequence;
+my %output;
 my %job;
 my @ondeck;
 my @retrylist;
@@ -45,31 +43,48 @@ my $index;
 my $next_flush=time+$FLUSHTIME;
 my $next_check=time+$TIMEOUT;
 my $processed=0;
+my $buffer_size=0;
+
+foreach (@ARGV){
+  $_="\'$_\'" if / /;
+  $ARGS.=" $_";
+}
+print "Passing args to client: $ARGS\n";
 
 open(INPUT,$input) or die "Unable to open input file ($input)\n";
 
 fast_recovery($FR_FILE);
 
 # make the socket
-my $sock=new IO::Socket::INET->new(LocalPort=>$SERVERPORT,
-	Proto=>'tcp',  Timeout => 45,
-         Listen => 200, Reuse => 1
-        ) or die "Unable to create socket\n";
+my %sockargs=( 
+	Proto=>'tcp',  
+	Timeout => 45,
+	Listen => 200,
+	Reuse => 1);
 
+$sockargs{LocalPort}=$ENV{PORT} if defined $ENV{PORT};
+
+my $sock=new IO::Socket::INET->new(%sockargs) or die "Unable to create socket\n";
+
+if (defined $ENV{SOCKFILE}){
+  open(SF,"> $ENV{SOCKFILE}" ) or die "Unable to open socket file\n";
+  print SF $sock->sockport()."\n";
+  close SF;
+}
 
 my $item=0;
-my $remaining=1;
+my $remaining_jobs=1;
+my $remaining_seq=1;
 my $shutdown=0;
 my $ident;
 my $command;
 
-open(PROGRESS,">> ./progress");
-open(OUTPUT,">> $output");
+open(PROGRESS,">> ./progress.$inputfile");
 open(ERROR,">> ./error.output");
 $SIG{INT} = \&catch_int;  # best strategy
 
 # This is the main work loop.
-while ($remaining){
+while ($remaining_jobs || $remaining_seq){
   my $new_sock=$sock->accept();
   if (defined $new_sock){
     my $clientaddr=$new_sock->peerhost();
@@ -79,16 +94,17 @@ while ($remaining){
 #
 # Do we need to send a query?  Make sure we aren't in a shutdown.
 #
-    send_query($new_sock) if ($send_query && $shutdown==0);
+    send_query($new_sock) if ($send_query && ($shutdown==0 || $remaining_seq!=0) );
     close $new_sock;
   }
 #  print "Remaining jobs ".join(" ",keys %job)."\n";    
   check_timeouts() if (time>$next_check);
-  flush_output() if (time>$next_flush || length $output_buffer > $MAXBUFF);
+  flush_output() if (time>$next_flush || $buffer_size > $MAXBUFF);
+  $remaining_seq=(scalar @ondeck + scalar @retrylist);
   if ( eof(INPUT) || $shutdown){
     $shutdown=1;                      # In case eof got us here.
-    $remaining=keys %job;             # How much pending stuff is there?
-    print "Draining: $remaining remaining connections\n";
+    $remaining_jobs=keys %job;             # How much pending stuff is there?
+    print "Draining: $remaining_jobs remaining connections.  $remaining_seq remaining sequences\n";
   }
 }
 
@@ -98,10 +114,11 @@ foreach my $seq (@ondeck){
 
 print "Doing final flush\n";
 flush_output();
+foreach my $file (keys %output){
+  $output{$file}->{handle}->close();
+}
 close PRROGRESS;
-close OUTPUT;
 close ERROR;
-close SERVER ;
 print "All done\n";
 
 # Interrupt handler
@@ -110,10 +127,11 @@ sub catch_int {
   my $signame = shift;
   if ($shutdown){
     flush_output();
+    foreach my $file (keys %output){
+      $output{$file}->{handle}->close();
+    }
     close PRROGRESS;
-    close OUTPUT;
     close ERROR;
-    close SERVER ;
     close PROGRESS;
     print "Exiting\n";
     exit;
@@ -121,15 +139,15 @@ sub catch_int {
   else{
     $shutdown=1;
     flush_output();
-    $remaining=keys %job;
+    $remaining_jobs=keys %job;
     print "Shutting down\n";
-    print "Draining: $remaining remaining connections\n";
+    print "Draining: $remaining_jobs remaining connections\n";
   }
 }
 
 sub do_request{
-  my $new_sock=shift;
-  my $clientaddr=$new_sock->peerhost();
+  my $sock=shift;
+  my $clientaddr=$sock->peerhost();
 
 #  print "Connect from $clientaddr\n";
 
@@ -138,29 +156,22 @@ sub do_request{
   $ident="noid";
 # Read from client.  Process requests and reponse.
 #
-  while(<$new_sock>){
+  while(<$sock>){
 # print $_;
     if (/^RESULTS /){
       my ($command,$jstep)=split;
       chomp $jstep;
       my $lines=0;
-      while(! $got_response){
-        $_=<$new_sock>;
-        if (/^DONE$/){
-          if (defined $job{$jstep}){
-            $job{$jstep}->{lines}=$lines;
-          }
-          print $new_sock "RECEIVED $jstep\n";
-          my $status=process_results($jstep);
-          print stderr "Unexpected report from $clientaddr:$ident for $jstep\n" if $status eq 0;
-          $got_response=1;
-        }
-        else{
-          $output_buffer.=$_;
-          $lines++;
-        }
-        $got_response=1 unless $_;  # catch the edge case
-      } # While for response
+      while (<$sock>){
+        last if /^DONE$/;
+        $lines+=read_file($sock,$_) if /^FILE /;
+      }
+      if (defined $job{$jstep}){
+        $job{$jstep}->{lines}=$lines;
+      }
+      print $sock "RECEIVED $jstep\n";
+      my $status=process_results($jstep);
+      print stderr "Unexpected report from $clientaddr:$ident for $jstep\n" if $status eq 0;
     }   #
     elsif (/^IDENT /){
       ($command,$ident)=split;
@@ -169,7 +180,7 @@ sub do_request{
       $send_query=1;
     }
     elsif (/^ARGS$/){
-      print $new_sock $ARGS;
+      print $sock $ARGS;
     }
     elsif (/^MESSAGE /){
       chomp; 
@@ -180,7 +191,7 @@ sub do_request{
       my ($command,$jstep)=split;
       print stderr "ERROR: Job step $jstep\n";
       print ERROR "ERROR: Job step $jstep\n";
-      print $new_sock "RECEIVED $jstep\n";
+      print $sock "RECEIVED $jstep\n";
       requeue_job($jstep);
     }
     else{
@@ -189,7 +200,22 @@ sub do_request{
   }
 
   return $send_query;
+}
 
+sub read_file{
+  my $sock=shift;
+  $_=shift;
+  my $clientaddr=$sock->peerhost();
+  my $lines=0;
+  my ($command,$file)=split;
+
+  while(<$sock>){
+     last if /^DONE$/;
+     $output{$file}->{buffer}.=$_;
+     $lines++;
+  }
+  $buffer_size+=length $output{$file}->{buffer};
+  return $lines;
 }
 
 # Process results from client.
@@ -253,14 +279,23 @@ sub send_query{
 # This tries to keep everything in a consistent state.
 #
 sub flush_output{
-  print OUTPUT $output_buffer; 
-  print PROGRESS $progress_buffer; 
-  flush OUTPUT;
-  flush PROGRESS;
 
-  printf "Flushed %ld bytes\n",length $output_buffer;
-  $output_buffer='';
+  foreach my $file (keys %output){
+    if ( ! defined $output{$file}->{handle}){
+      print "Opening new file $file\n";
+      $output{$file}->{handle}=new IO::File ">> $file";
+      die "Unable to open file $file\n" if ! defined $output{$file}->{handle};
+    }
+    my $handle=$output{$file}->{handle};
+    printf "Flushed %ld bytes to %s\n",length $output{$file}->{buffer},$file;
+    print {$handle} $output{$file}->{buffer};
+    $handle->flush();
+    $output{$file}->{buffer}='';
+  }
+  print PROGRESS $progress_buffer; 
+  flush PROGRESS;
   $progress_buffer='';
+  $buffer_size=0;
 
   my $ct=write_fastrecovery($FR_FILE);
   printf "Wrote fast recovery (%d items)\n", $ct;
@@ -294,6 +329,7 @@ sub build_list{
     push @list,shift @ondeck;
     $ct++;
   }
+#  print "Read $ct\n";
   return @list;
 }
 
@@ -426,8 +462,11 @@ sub fast_recovery{
 #
 sub write_fastrecovery{
   my $filename=shift;
+  my $offset;
   open(FR,"> $filename.new");
-  printf FR "# max: %ld %ld\n",$index,tell(INPUT)-length($sequence{$next_header}->{sequence});
+  $offset=tell(INPUT)-length($sequence{$next_header}->{sequence});
+  $offset=tell(INPUT) if (eof(INPUT));
+  printf FR "# max: %ld %ld\n",$index,$offset;
   my $seqid;
   my $ct=0;
 
