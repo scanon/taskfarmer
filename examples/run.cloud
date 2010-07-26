@@ -1,0 +1,16 @@
+#!/bin/sh
+
+export SERVER=sgn02.nersc.gov
+
+export TMPDIR=/tmp/
+export PIPELINE_PATH=/jgi/img_gp_pipeline/
+export STAGE=/jgi/img_gp_pipeline/NERSC/stage.cloud.sh 
+export PIPELINE_PLATFORM=CLOUD
+export IMG_OUTPUT=/tmp/debug/log
+ARGS=$(echo "ARGS"|netcat $SERVER $1)
+export IMG_ID=$(echo $ARGS|sed 's/.*-id //'|sed 's/ .*//')
+export IMG_INPUT=/tmp/debug/$IMG_ID
+export IDCOMMAND='ID=$(hostname)'
+mkdir /tmp/debug
+
+$PIPELINE_PATH/NERSC/run $SERVER $1

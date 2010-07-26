@@ -8,30 +8,32 @@ SERVER=$1
 PORT=$2
 TIMEOUT=45
 TMPDIR=/tmp/$USER/$$
-PATH=$TMPDIR:$PATH:$BASE/bin
-PERL=/project/projectdirs/genomes/apps/lib/perl5
 MFILE=message
+RFILE=rmess
+TMPRFILE=response
 export STEP
 
+. $STAGE
+
+# Set limit on physical memory
 ulimit -m 1536000
-ulimit -M 1536000
-export LD_LIBRARY_PATH=/scratch/scratchdirs/canon/software/lib/
-export PERLLIB=$PERL/site_perl/5.8.8/:$PERL/5.8.8/:$PERL/5.8.8/x86_64-linux-thread-multi
+# Set limit on virtual memory
+# ulimit -v 1536000
 mkdir -p $TMPDIR
 cd $TMPDIR
-
-#$BASE/watch_mem &
 
 function cleanup {
 #  echo "Called cleanup"
   cd /tmp
   rm -rf $TMPDIR
+  CLEANUP=1
+  . $STAGE
   exit
 }
 trap cleanup 2 15
 
 function catfiles {
-  for f in $(ls *.tbl *.geneC* )
+  for f in $(ls $GETFILES )
   do
     echo "FILE $f"
     cat $f
@@ -46,15 +48,17 @@ eval "$IDCOMMAND"
 
 export ARGS=$(echo "ARGS"|netcat $SERVER $PORT)
 
-(echo "IDENT $ID";echo "NEXT")|netcat $SERVER $PORT > rmess
-while [ -s ./rmess ] ; do
+export BASE=/tmp/$USER/img_gp_pipeline/NERSC
+(echo "IDENT $ID";echo "NEXT")|netcat $SERVER $PORT > $RFILE
+while [ -s ./$RFILE ] ; do
 # Run the pipeline wrapper script.
 #
-  STEP=$(grep '^STEP:' rmess|sed 's/STEP: //')
-  cat rmess|grep -v '^STEP:' > query
+  STEP=$(grep '^STEP:' $RFILE|sed 's/STEP: //')
+  cat $RFILE|grep -v '^STEP:' > query
+#  /project/projectdirs/genomes/apps/bin/strace -f -o $SCRATCH/st.out $BASE/run_pipeline
   $BASE/run_pipeline
   RET=$?
-  rm rmess query
+  rm $RFILE query
   echo "IDENT $ID" > $MFILE
   if [ $RET -eq 0 ] ; then
     echo "RESULTS $STEP" >> $MFILE
@@ -64,17 +68,16 @@ while [ -s ./rmess ] ; do
     echo "ERROR $STEP" >> $MFILE
     sleep 1
   fi
-
   if [ ! -e shutdown ] ; then
     echo "NEXT" >> $MFILE 
   fi
 
 # Send Message
  retry=10
- (cat $MFILE)|netcat -w $TIMEOUT $SERVER $PORT > response
-  while [ $retry -gt 0 ] && [ $(grep -c RECEIVED response) -eq 0 ] ; do
+ (cat $MFILE)|netcat -w $TIMEOUT $SERVER $PORT > $TMPRFILE
+  while [ $retry -gt 0 ] && [ $(grep -c RECEIVED $TMPRFILE) -eq 0 ] ; do
     echo "Retrying $retry"
-    (cat $MFILE)|netcat -w $TIMEOUT $SERVER $PORT > response
+    (cat $MFILE)|netcat -w $TIMEOUT $SERVER $PORT > $TMPRFILE
     let retry=retry-1
   done
 
@@ -83,7 +86,9 @@ while [ -s ./rmess ] ; do
     cleanup
   fi
 #
-  grep -v RECEIVED response  > rmess
+  grep -v RECEIVED $TMPRFILE  > $RFILE
+  LIST=$(ls |grep -v "^$RFILE$")
+  rm $LIST
 done
 
 cleanup
