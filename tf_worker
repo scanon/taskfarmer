@@ -6,17 +6,16 @@
 #
 SERVER=$1
 PORT=$2
-TMPDIR=/tmp/$USER
+export TF_TMPDIR=/tmp/$USER-$$
 
 # Source any setup files that are needed for the system.
 #
-TF_CONFDIR=$TF_HOME/share/taskfarmer/
-if [ -x $TF_CONFDIR/$NERSC_HOST.stage ] ; then
-  . $TF_CONFDIR/$NERSC_HOST.stage
+if [ -x $TF_HOME/conf/$NERSC_HOST.stage ] ; then
+  . $TF_HOME/conf/$NERSC_HOST.stage
 fi
 
-mkdir -p $TMPDIR
-cd $TMPDIR
+mkdir -p $TF_TMPDIR
+cd $TF_TMPDIR
 
 # Source the staging file specified by the user if there is one.
 #
@@ -27,7 +26,7 @@ fi
 # Change back into the temp dir just in case the
 # stager moved us around.
 #
-cd $TMPDIR
+cd $TF_TMPDIR
 
 # This will be called if an interupt is received.
 #
@@ -40,7 +39,7 @@ cleanup() {
   done
   sleep 1
   cd /tmp
-  rm -rf $TMPDIR
+  rm -rf $TF_TMPDIR
   CLEANUP=1
   if [ ! -z $STAGE_ONCE ] && [ -x "$STAGE_ONCE" ] ; then
   . $STAGE_ONCE
@@ -52,7 +51,7 @@ trap cleanup 2 15
 
 # Determine the number of threads
 #
-THREADS=$(grep -c processor /proc/cpuinfo)
+[ -z $THREADS ] && THREADS=$(grep -c processor /proc/cpuinfo)
 #
 # Run the IDCOMMAND
 eval $IDCOMMAND

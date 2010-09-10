@@ -1,0 +1,79 @@
+#!/usr/bin/perl
+use POSIX ":sys_wait_h";
+
+$TARGET=$ARGV[0];
+$PAUSE=$ARGV[1];
+$SIZE=$ARGV[2];
+$THREADS=$ARGV[3];
+$SERVER=$ARGV[4];
+$PORT=$ARGV[5];
+
+$TCP="/project/projectdirs/genomes/apps/bin/tcpxd";
+
+
+#start_relay();
+
+$ct=1;
+
+while (1 ){
+  $ct=check_status(); 
+  if ($ct<$TARGET && time() > $last+$PAUSE){
+    spawn();
+  }
+  exit if ($TARGET==0 && $ct==0);
+  sleep 60;
+}
+
+sub check_status{
+  my $ct=0;
+  $kid = waitpid(-1, WNOHANG);
+  $TARGET-- if ($kid && $? eq 0);
+  for $pid (keys %pids){
+    if ( -e "/proc/$pid/stat" ){
+      $ct++;
+#      print "$pid looks good\n";
+    }
+    else{
+      print "Task $pid died\n";
+#      `echo "$pid died"|mail -s "Task $pid died" canon\@nersc.gov`;
+      delete $pids{$pid};
+    }
+  } 
+  return $ct;
+}
+
+sub spawn{
+  if (my $pid=fork()){
+    print "Spawned $pid\n";
+    $pids{$pid}=1;
+    $last=time();
+#    `echo "$pid started"|mail -s "Task $pid started" canon\@nersc.gov`;
+  }
+  else{
+    exec "aprun -n $SIZE -N 1 -d $THREADS -a xt ./run $SERVER $PORT";
+#    exec "sleep $SIZE";
+  }
+}
+
+sub start_relay{
+  $started=0;
+  $port=5000;
+
+  while (!$started){
+    if (my $pid=fork()){
+      print "Spawned $pid\n";
+      $tcp_pid=$pid;
+    }
+    else{
+      exec "$TCP --timeout 45 $port $HOST $PORT";
+    }
+    sleep 2;
+    $kid = waitpid(-1, WNOHANG);
+    if ( -e "/proc/$tcp_pid/stat" ){
+      $started=1;
+    }
+    else{
+     $port++;
+    }
+  }
+}

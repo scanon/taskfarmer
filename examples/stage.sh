@@ -8,7 +8,7 @@
 # client.  For example, setting the PATH or 
 # LD_LIBRARY_PATH.  The settings below provides
 # support for Java and Perl out on compute nodes
-# It also illustrates unpacking some application in TMPDIR
+# It also illustrates unpacking some application in TF_TMPDIR
 # to releave load on the global file system.
 #
 
@@ -28,9 +28,9 @@ export PERLLIB=$PERL/site_perl/$PERL_VER/:$PERL/$PERL_VER/:$PERL/$PERL_VER/$PERL
 
 # Cleanup
 if [ $CLEANUP ] ; then
-  (cd $TMPDIR;rm -rf $TMPDIR/app)
+  (cd $TF_TMPDIR;rm -rf $TF_TMPDIR/app)
 else
-  mkdir $TMPDIR/app
-  (cd $TMPDIR/app; tar xzf $TARBALL)
-  export PATH=$TMPDIR/app/bin:$PATH
+  mkdir $TF_TMPDIR/app
+  (cd $TF_TMPDIR/app; tar xzf $TARBALL)
+  export PATH=$TF_TMPDIR/app/bin:$PATH
 fi

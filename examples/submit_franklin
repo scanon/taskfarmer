@@ -1,0 +1,45 @@
+#!/bin/sh
+#
+#PBS -l mppwidth=4104,mppnppn=4,walltime=24:00:00
+#PBS -N BLAST 
+#PBS -q regular
+#PBS -A m342
+#PBS -V
+SIZE=128
+PAUSE=200
+PAUSE=60
+THREADS=4
+
+
+export BASE=/project/projectdirs/genomes/runs/kostas/
+export TMPDIR=/tmp/genomes
+export DBDIR=/scratch2/scratchdirs/canon/jgi/illumina
+export DB=all1.fna
+#export BLASTOPTS="-a $THREADS -p blastx -w 15 -m0 -b 1000 -v 1000 -e 1"
+export BLASTOPTS="-a $THREADS -p blastn -m0 -b 1000 -v 1000 -e 1"
+#export BLASTOPTS="-a $THREADS -p blastp -F m\ S -e 1e-2 -b 2000 -z 700000000 -m 8"
+#export BLASTOPTS="-a $THREADS -p blastp -e 1e-2 -b 2000 -z 700000000 -m 8"
+SERVER=dtn02.nersc.gov
+PORT=4999
+
+# This will be sourced by the client sript
+#
+export IDCOMMAND='ID="frank-$(/bin/cat /proc/cray_xt/nid)"'
+
+cd $BASE
+
+# Start Relay and get the IP address for the MOM node
+#
+port=$(./tcprelay $SERVER $PORT)
+addr=$(/sbin/ifconfig ss|grep 'inet addr'|awk -F: '{print $2}'|sed 's/ .*//')
+echo "$port $addr"
+
+# Run the job
+#
+./dispatch 8 $PAUSE $SIZE $THREADS $addr $port
+
+wait
+
+# Shutdown relay
+#
+./tcprelay -k $port

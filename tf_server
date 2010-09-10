@@ -19,24 +19,24 @@ $inputfile=~s/.*\///;
 #
 my $BATCHSIZE=32;
 my $TIMEOUT=1800;
-my $TIMEOUT_SOCKET;
-my $MAXRETRY=8;
+my $MAXRETRY=5;
 my $MAXBUFF=100*1024*1024;  # 100M buffer
-my $FLUSHTIME=20;
+my $FLUSHTIME=120;
 my $FR_FILE="fastrecovery.$inputfile";
 
 # Override defaults
 $BATCHSIZE=$ENV{BATCHSIZE} if defined $ENV{BATCHSIZE};
 $TIMEOUT=$ENV{SERVER_TIMEOUT} if defined $ENV{SERVER_TIMEOUT};
-$TIMEOUT_SOCKET=$ENV{TIMEOUT_SOCKET} if defined $ENV{TIMEOUT_SOCKET};
 
 #  Global vars
 #
+my $next_header;
 my $progress_buffer='';
-my %input;
+my %sequence;
 my %output;
 my %job;
 my @ondeck;
+my @retrylist;
 my @failed;
 my $item;
 my $offset;
@@ -47,14 +47,14 @@ my $processed=0;
 my $buffer_size=0;
 my $chunksize=2*$BATCHSIZE;
 
-my $inputf=new IO::File $input or die "Unable to open input file ($input)\n";
+open(INPUT,$input) or die "Unable to open input file ($input)\n";
 
 fast_recovery($FR_FILE);
 
 # make the socket
 my %sockargs=( 
 	Proto=>'tcp',  
-	Timeout => $TIMEOUT_SOCKET,
+	Timeout => 45,
 	Listen => 200,
 	Reuse => 1);
 
@@ -87,6 +87,7 @@ while ($remaining_jobs || $remaining_seq){
   my $new_sock=$sock->accept();
   if (defined $new_sock){
     my $clientaddr=$new_sock->peerhost();
+
     my $send_query=do_request($new_sock);
 
 #
@@ -97,11 +98,11 @@ while ($remaining_jobs || $remaining_seq){
   }
   check_timeouts() if (time>$next_check);
   flush_output() if (time>$next_flush || $buffer_size > $MAXBUFF);
-  $remaining_seq=(scalar @ondeck);
-  if ( eof($inputf) || $shutdown){
+  $remaining_seq=(scalar @ondeck + scalar @retrylist);
+  if ( eof(INPUT) || $shutdown){
     $shutdown=1;                      # In case eof got us here.
     $remaining_jobs=keys %job;             # How much pending stuff is there?
-    print LOG "Draining: $remaining_jobs remaining connections.  $remaining_seq remaining inputs\n";
+    print LOG "Draining: $remaining_jobs remaining connections.  $remaining_seq remaining sequences\n";
   }
 }
 
@@ -112,7 +113,7 @@ foreach my $seq (@ondeck){
 print LOG "Doing final flush\n";
 flush_output();
 foreach my $file (keys %output){
-  $output{$file}->{handle}->close() if defined $output{$file}->{handle};
+  $output{$file}->{handle}->close();
 }
 print LOG "All done\n";
 close PRROGRESS;
@@ -239,15 +240,15 @@ sub process_results{
   my $jstep=shift;
 
   if (defined ($job{$jstep})){
-    my $inputs=join ",",@{$job{$jstep}->{list}};
+    my $sequences=join ",",@{$job{$jstep}->{list}};
     $progress_buffer.=sprintf "%s %s %d %d %d %d\n", 
-	$inputs,$ident,time-$job{$jstep}->{start},
+	$sequences,$ident,time-$job{$jstep}->{start},
 	$job{$jstep}->{lines},time,$job{$jstep}->{len};
     printf LOG "Recv: %d seq:%25s hostid:%-10s  time:%-4ds lines: %-6d proc: %d\n", 
-	$jstep, substr($inputs,0,25),$ident,
+	$jstep, substr($sequences,0,25),$ident,
 	time-$job{$jstep}->{start},$job{$jstep}->{lines},$processed;
-    foreach my $inputid (@{$job{$jstep}->{list}}){
-      delete $input{$inputid};
+    foreach my $seqid (@{$job{$jstep}->{list}}){
+      delete $sequence{$seqid};
     }
     $processed+=$job{$jstep}->{count};
     delete $job{$jstep};
@@ -271,9 +272,9 @@ sub send_query{
   if (scalar @list > 0){
     print $new_sock "STEP: $item\n";
     foreach my $seq (@list){
-      print $new_sock $input{$seq}->{input};
+      print $new_sock $sequence{$seq}->{sequence};
       push @{$sent}, $seq;
-      $length+=length $input{$seq}->{input};
+      $length+=length $sequence{$seq}->{sequence};
       $ct++;
     }
 # Save info about the job step.
@@ -293,8 +294,7 @@ sub send_query{
 sub flush_output{
 
   foreach my $file (keys %output){
-    next if ($file eq 'stdout' || $file eq 'stderr');
-    if ( ! defined $output{$file}->{handle} ){
+    if ( ! defined $output{$file}->{handle}){
       print LOG "Opening new file $file\n";
       $output{$file}->{handle}=new IO::File ">> $file";
       die "Unable to open file $file\n" if ! defined $output{$file}->{handle};
@@ -316,22 +316,27 @@ sub flush_output{
 }
 
 #
-# This builds up a work list of args inputs.
-# It will read in more input if there isn't enough ondeck.
+# This builds up a work list of args sequences.
+# It first will look at anything on retrylist then
+# go to the ondeck queue.
 #
 sub build_list{
   my $batchsize=shift;
   my @list;
-  my @tlist;
   my $ct=0;
 
+
+# Check retry stack
+#
+  while ($ct<$batchsize && scalar @retrylist >0){
+    push @list,shift @retrylist;
+    $ct++;
+  }
 
 # Build rest from ondeck
 #
   if (scalar @ondeck < ($batchsize-$ct)){
-    @tlist=read_input($inputf,$chunksize);
-    $index+=scalar @tlist;
-    push @ondeck, @tlist;
+    read_input($chunksize);
   }
   while ($ct<$batchsize && scalar @ondeck >0){
     push @list,shift @ondeck;
@@ -354,65 +359,66 @@ sub check_timeouts{
   $next_check=time+$TIMEOUT/2;
 }
 
-# Take inputs for job step
+# Take sequences for job step
 # and put back on the queue.
 #
 sub requeue_job{
   my $jstep=shift;
 
-  foreach my $inputid (@{$job{$jstep}->{list}}){
-    $input{$inputid}->{retry}++;
-    printf LOG "Retrying %s for %d time\n",$inputid,$input{$inputid}->{retry};
-    if ($input{$inputid}->{retry} < $MAXRETRY){
-      unshift @ondeck,$inputid;
+  foreach my $seqid (@{$job{$jstep}->{list}}){
+    $sequence{$seqid}->{retry}++;
+    if ($sequence{$seqid}->{retry} < $MAXRETRY){
+      push @retrylist,$seqid;
     }
     else{
-      print stderr "MAX:  $inputid hit max retries\n";
-      print ERROR "FAILED: $inputid hit max retries\n";
-      push @failed,$inputid;
+      print stderr "MAX:  $seqid hit max retries\n";
+      print ERROR "FAILED: $seqid hit max retries\n";
+      push @failed,$seqid;
     }
   }
   delete $job{$jstep};
 }
 
 #
-# Read in $read number of inputs from $in.
-# If $read is 0 then read until the eof.
-# Store input and return list.
+# Read in $read number of sequences
+# Store sequence and push header onto ondeck stack
 #
 sub read_input{
-  my $in=shift;
   my $read=shift;
   my $ct=0;
-  my $l=0;
-  my $id;
-  my @list;
 
-  return @list if eof($in);
-  while(<$in>){
-    die "Bad start: $_" if ($l eq 0 && ! /^>/);
-    if (/^>/){
-      $ct++;
-      last if ($read && $ct>$read);
-      $id=(tell($in)-length($_));
-      $index++;
-      my ($bl,$header,$rest)=split /[> \r\n]/;
-      $input{$id}->{header}=$header;
-      $input{$id}->{input}=$_;
-      $input{$id}->{retry}=0;
-      $input{$id}->{offset}=$id;
-      $input{$id}->{index}=$index;
-      push @list,$id;
+  return 0 if eof(INPUT);
+
+  if (! defined $next_header){
+    $_=<INPUT>;
+    while (/^$/){
+      $_=<INPUT>;
     }
-    else{
-       $input{$id}->{input}.=$_;
-    }
-    $l++;
+    die "Bad start: $_\n" unless /^>/;
+    my ($bl,$header,$rest)=split /[> \r\n]/;
+    $next_header=$header;
+    $sequence{$next_header}->{sequence}=$_;
+    $sequence{$next_header}->{retry}=0;
   }
-  my $length=length $_;
-  seek $in, -$length,1 or die "Unable to step back: $length";
-   
-  return @list;
+
+  while ($ct<$read && !eof(INPUT)){
+    $_=<INPUT>;
+    while(! /^>/ ){
+       $sequence{$next_header}->{sequence}.=$_;
+       $_=<INPUT>;
+       last if eof(INPUT);
+    }
+    push @ondeck, $next_header if (defined $next_header && $next_header ne '');
+    $ct++;
+    my ($bl,$header,$rest)=split /[> \r\n]/;
+    $next_header=$header;
+    if (defined $next_header){
+      $sequence{$next_header}->{sequence}=$_;
+      $sequence{$next_header}->{retry}=0;
+    }
+  }
+  $index+=$ct;
+  return $ct;
 }
 
 #
@@ -424,64 +430,82 @@ sub fast_recovery{
   my $filename=shift; 
   return unless ( -e $filename);
   print STDERR "Recoverying using $filename\n";
-  my $fr=new IO::File($filename) or die "Unable to open $filename\n";
+  open(FR,$filename) or die "Unable to open $filename\n";
 # Read the max index and offset
 #
-  $_=<$fr>;
+  $_=<FR>;
   $_=~s/.*max: //;  
   ($index,$offset)=split;
-  my @offsets=<$fr>;
-  foreach (@offsets){
-    seek $inputf,$_,0 or die "Unable to seek to input file location $_\n";
-    die "Invalid offset: $_ is larger than $offset\n" if ($_>$offset);
-    push @ondeck,read_input($inputf,1);
+  if (eof(FR)){
+    close FR;
+    seek INPUT,$offset,0;
+    return;
   }
-  seek $inputf,$offset,0 or die "Unable to seek to input file location\n";
-  printf LOG "Recovered %d inputs from $filename\n", scalar @ondeck;
-}
 
-sub check_inputs{
-  foreach my $inputid (@_){
-    die "Bad input in retry $inputid\n\n$input{$inputid}->{input}\n" unless $input{$inputid}->{input}=~/^>/;
+  $_=<FR>;
+  die "Bad start: $_\n" unless /^>/;
+  my ($bl,$header,$rest)=split /[> \r\n]/;
+
+  while (!eof(FR)){
+    $sequence{$header}->{sequence}=$_;
+    $sequence{$header}->{retry}=0;
+    $_=<FR>;
+    while(! /^>/){
+       $sequence{$header}->{sequence}.=$_;
+       $_=<FR>;
+       last if eof(FR);
+    }
+    push @ondeck, $header if (defined $header && $header ne '');
+    ($bl,$header,$rest)=split /[> \r\n]/;
   }
+  seek INPUT,$offset,0;
+  printf LOG "Recovered %d sequences from $filename\n", scalar @ondeck;
+  close FR;
 }
 
 # Write the fastrecovery file.
 # The first line is the index number and the offset into the
 #   query file.
-# This is followed by a list of inputs that were in process
+# This is followed by a list of sequences that were in process
 # This list must include retries, pending jobs, and ondeck.
 # The last is needed because the file pointer has already moved past
-#   the ondeck list of inputs.
+#   the ondeck list of sequences.
 #
 sub write_fastrecovery{
   my $filename=shift;
   my $offset;
-  my @recoverylist;
-
   open(FR,"> $filename.new");
-#  $offset=tell($inputf)-length($input{$next_header}->{input});
-  $offset=tell($inputf);
-  $offset=tell($inputf) if (eof($inputf));
+  $offset=tell(INPUT)-length($sequence{$next_header}->{sequence});
+  $offset=tell(INPUT) if (eof(INPUT));
   printf FR "# max: %ld %ld\n",$index,$offset;
-  my $inputid;
+  my $seqid;
   my $ct=0;
 
 # Print out anything on retry queue
-  foreach my $jstep (keys %job){
-    foreach $inputid (@{$job{$jstep}->{list}}){
-      push @recoverylist,$inputid;
-    }
-  }
-  push @recoverylist, @ondeck;
-
-  check_inputs(@recoverylist);
-  foreach my $inputid (@recoverylist){
-#    print FR $input{$inputid}->{input};
-    printf FR "%d\n",$input{$inputid}->{offset};
+  foreach my $seqid (@retrylist){
+    die "Bad sequence in retry $seqid\n\n$sequence{$seqid}->{sequence}\n" unless $sequence{$seqid}->{sequence}=~/^>/;
+    print FR $sequence{$seqid}->{sequence};
     $ct++;
   }
-  close FR; 
+ 
+# Print out any pending jobs
+# 
+  foreach my $jstep (keys %job){
+    foreach $seqid (@{$job{$jstep}->{list}}){
+      die "Bad sequence in pending $seqid\n\n$sequence{$seqid}->{sequence}\n\n" unless $sequence{$seqid}->{sequence}=~/^>/;
+      print FR $sequence{$seqid}->{sequence};
+      $ct++;
+    }
+  }
+
+# Print out anything in the ondeck circle
+  foreach my $seqid (@ondeck){
+    die "Bad sequence in ondeck $seqid\n" unless $sequence{$seqid}->{sequence}=~/^>/;
+    print FR $sequence{$seqid}->{sequence};
+    $ct++;
+  }
+  close FR;
+
 # Try to safely move the file in place.
 #
   unlink $filename;

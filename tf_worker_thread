@@ -1,4 +1,4 @@
-#!/project/projectdirs/genomes/apps/bin/perl
+#!/usr/bin/perl
 #
 # This is the standard run script that is executed on the compute node for each thread.
 # It fetches sequences from a server, runs the app, and pushes back results
@@ -28,7 +28,10 @@ my $SLEEP=5;
 
 # This is our work area
 #
-my $TMPDIR="/tmp/$ENV{USER}/$THREAD";
+die "TF_TMPDIR not defined\n" if (! defined $ENV{TF_TMPDIR});
+die "TF_TMPDIR doesn't exist\n" if (! -e $ENV{TF_TMPDIR});
+
+my $TMPDIR="$ENV{TF_TMPDIR}/$THREAD";
 my $IGNORE_RETURN=1 if defined $ENV{IGNORE_RETURN};
 
 # Get our ID
@@ -36,10 +39,8 @@ my $ID="unknown";
 $ID=$ENV{ID} if defined $ENV{ID};
 my $input;
 
-mkdir "/tmp/$ENV{USER}";
 mkdir $TMPDIR;
 chdir $TMPDIR or die "Unable to change to $TMPDIR";
-$ENV{TMPDIR}=$TMPDIR;
 
 
 my @args=read_args($SERVER,$PORT);
@@ -55,7 +56,6 @@ my $step=-1;
 my $status=0;
 while ( ($step=send_and_get($SERVER,$PORT,$step,$status)) >= 0 ){
 # Run the users code
-  $ENV{STEP}=$step;
   $status=run_application($app,$input,@args);
 }
 if ($step eq -1){
@@ -79,6 +79,7 @@ sub catfiles {
   foreach (@files){
     next if ($_ eq "." || $_ eq "..");
     next if (defined $ENV{GETFILES} && ! /$ENV{GETFILES}/ );
+    next unless (-f $_);
     print $sock "FILE $_\n";
     open(F,"$_");
     while(<F>){
@@ -86,7 +87,6 @@ sub catfiles {
     }
     close F;
     print $sock "DONE\n";
-    unlink "$TMPDIR/$_";
   }
 # Cleanup any files in the work directory
 #
@@ -133,7 +133,7 @@ sub connect_server {
     return $sock if defined $sock;
     sleep $SLEEP;
     $retry++;
-    print STDERR "Retrying connection to $server on $port ($retry)\n" if ($retry<$MAX_RETRIES);
+    print "Retrying connection to $server on $port ($retry)\n" if ($retry<$MAX_RETRIES);
   }
   return $sock
 }
@@ -157,6 +157,15 @@ sub send_and_get {
     if ($error){
       print STDERR "ERROR: step $step exited with $status\n";
       print STDERR `cat stderr`;
+      if (defined $ENV{DEBUGDIR}){
+        my $ddir="$ENV{DEBUGDIR}/step.$step";
+        mkdir $ddir;
+        print STDERR `ls -l > $ddir/listing.workingdir`;
+        print STDERR `ls -l ../ $ddir/listing.parent`;
+        print STDERR `echo "$input" > $ddir/input`;
+        print STDERR `mv * $ddir/`;
+        die "ERROR";
+      }
       print $sock "ERROR $step\n";
     }
     else{
@@ -165,7 +174,7 @@ sub send_and_get {
       print $sock "DONE\n";
     }
     $_=<$sock>;
-    $error=1 unless /RECEIVED/;
+    $error=1 if ! /RECIEVED/;
   }
   print $sock "NEXT\n";
   my $step=<$sock>;
@@ -195,10 +204,10 @@ sub run_application{
   select STDOUT; $| = 1;
   select STDERR; $| = 1;
 
-  my $st=open(APP,"|-",$app,@_) or die "Unable to exec\n";
+  my $st=open(APP,"|-",$app,@_);
   if (!$st){
-    print $olderr "Error: executing $app\n";
-    return -1;
+    print $olderr "Error: not able to execute or find $app ($st)\n";
+    die;
   }
 # Print the input to the application
   print APP $input;
