@@ -27,8 +27,10 @@ else
 fi
 
 # Source the configuration file
-if [ -e $TF_HOME/conf/$NERSC_HOST.conf ] ; then
-  . $TF_HOME/conf/$NERSC_HOST.conf
+[ -z $TF_HOME ] && export TF_HOME=$(dirname $0|sed 's/bin$//')
+[ -z $TF_CONFDIR ] && TF_CONFDIR=$TF_HOME/share/taskfarmer
+if [ -e $TF_CONFDIR/$NERSC_HOST.conf ] ; then
+  . $TF_CONFDIR/$NERSC_HOST.conf
 else
   echo "The Task Farmer is not currently supported on this system."
   exit
