@@ -160,10 +160,11 @@ sub do_request{
     if (/^RESULTS /){
       my ($command,$jstep)=split;
       chomp $jstep;
+      my $expected=defined $job{$jstep};
       my $lines=0;
       while (<$sock>){
         last if /^DONE$/;
-        $lines+=read_file($sock,$_) if /^FILE /;
+        $lines+=read_file($sock,$_,$expected) if /^FILE /;
       }
       if (defined $job{$jstep}){
         $job{$jstep}->{lines}=$lines;
@@ -210,11 +211,14 @@ sub do_request{
 sub read_file{
   my $sock=shift;
   $_=shift;
+  my $write=shift;
+
   my $clientaddr=$sock->peerhost();
   my $lines=0;
   my ($command,$file)=split;
   while(<$sock>){
      last if /^DONE$/;
+     next unless $write;   # should we write out stderr?
      if ( $file eq "stdout"){
        print stdout $_;
      }
@@ -307,6 +311,7 @@ sub flush_output{
   }
   print PROGRESS $progress_buffer; 
   flush PROGRESS;
+  flush ERROR;
   $progress_buffer='';
   $buffer_size=0;
 
@@ -466,6 +471,8 @@ sub write_fastrecovery{
   printf FR "# max: %ld %ld\n",$index,$offset;
   my $inputid;
   my $ct=0;
+
+  push @recoverylist,@failed;
 
 # Print out anything on retry queue
   foreach my $jstep (keys %job){

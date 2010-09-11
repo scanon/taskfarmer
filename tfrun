@@ -14,7 +14,8 @@ cleanup () {
   fi
   [ -e $SOCKFILE ] && rm $SOCKFILE
   [ -d $TF_DIR ] && rmdir $TF_DIR
-  exit 
+  [ ! -z $USE_RELAY ] && [ $USE_RELAY -eq 2 ] && echo "Stoping relay" && stop_relay
+  exit $STATUS
 }
 trap cleanup 2 15
 
@@ -62,6 +63,7 @@ if [ -z $TF_ADDR ] && [ -z $TF_PORT ] ; then
   TF_PORT=$(cat $SOCKFILE)
 else
   echo "Server defined.  Will contact $TF_ADDR:$TF_PORT"
+  [ ! -z USE_RELAY ] && USE_RELAY=2 && echo "Starting relay" && start_relay
 fi
 
 if [ -z $SERVER_ONLY ] ; then
@@ -71,15 +73,18 @@ if [ -z $SERVER_ONLY ] ; then
 # Get exit status for aprun
 #
   STATUS=$?
+  [ ! -z $USE_RELAY ] && [ $USE_RELAY -eq 2 ] && echo "Stoping relay" && stop_relay
 
-# Kill the server (just in case)
-  [ -e $PIDFILE ] && kill $(cat $PIDFILE) > /dev/null 2>&1
-  [ -e $PIDFILE ] && rm $PIDFILE
-  [ -e $SOCKFILE ] && rm $SOCKFILE
-  exit $STATUS
 else
   echo "Starting in server only mode." 1>&2
   echo "Cut and paste..." 1>&2
   echo "TF_ADDR=$TF_ADDR TF_PORT=$TF_PORT tfrun" 1>&2
   wait $(cat $PIDFILE)
+  STATUS=$?
 fi
+
+# Kill the server (just in case)
+[ -e $PIDFILE ] && kill $(cat $PIDFILE) > /dev/null 2>&1
+[ -e $PIDFILE ] && rm $PIDFILE
+[ -e $SOCKFILE ] && rm $SOCKFILE
+exit $STATUS
