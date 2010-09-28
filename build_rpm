@@ -1,0 +1,41 @@
+#!/bin/sh
+
+# Helper script to build an rpm
+#
+SOURCE=`pwd`
+
+# Version
+PACK=taskfarmer
+VERSION=0.2
+
+# Variables
+#
+TMPDIR=/tmp/$$
+SDIR=$TMPDIR/${PACK}-${VERSION}
+TARFILE=${PACK}-${VERSION}.tgz
+
+mkdir $TMPDIR
+mkdir $SDIR
+cp -a * $SDIR/
+(cd $TMPDIR;tar cvzf $TMPDIR/$TARFILE $PACK-$VERSION/ --exclude=.svn)
+
+# Make RPM build space
+#
+mkdir $TMPDIR/rpmbuild
+mkdir $TMPDIR/rpmbuild/SPECS
+mkdir $TMPDIR/rpmbuild/SOURCES
+mkdir $TMPDIR/rpmbuild/BUILD
+mkdir $TMPDIR/rpmbuild/RPMS
+mkdir $TMPDIR/rpmbuild/SRPMS
+
+cd $TMPDIR
+# Build RPM
+rpmbuild --define "_topdir $TMPDIR/rpmbuild" -ta $TARFILE
+
+# Move RPM to /tmp
+mv $TMPDIR/rpmbuild/RPMS/*/*rpm /tmp
+
+exit
+# remove scratch space
+#
+rm -rf $TMPDIR

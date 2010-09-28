@@ -1,5 +1,5 @@
 
-PREFIX := /usr
+prefix := /usr
 
 NAME	= taskfarmer
 
@@ -9,9 +9,9 @@ SHAREFILES=	share/carver.conf  share/franklin.conf  share/franklin.stage share/t
 EXAMPLEFILES=	examples/stage.sh examples/fix_perl_path.sh examples/sample.sh examples/pack.sh \
 		examples/blast.qsub examples/stage.cloud.sh examples/sample.qsub examples/run.cloud
 
-BINDIR=		$(PREFIX)/bin
-LIBEXECDIR=	$(PREFIX)/libexec
-SHAREDIR=	$(PREFIX)/share/$(NAME)
+BINDIR=		$(prefix)/bin
+LIBEXECDIR=	$(prefix)/libexec/$(NAME)
+SHAREDIR=	$(prefix)/share/$(NAME)
 EXAMPLESDIR=	$(SHAREDIR)/examples
 
 all:

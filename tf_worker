@@ -59,7 +59,7 @@ eval $IDCOMMAND
 export BID=$ID
 for THREAD in $(seq $THREADS) ; do
   export ID="$BID-$THREAD"
-  perl $TF_HOME/libexec/tf_worker_thread $SERVER $PORT $THREAD &
+  perl $TF_HOME/libexec/taskfarmer/tf_worker_thread $SERVER $PORT $THREAD &
   PIDS="$PIDS $!"
 done
 
