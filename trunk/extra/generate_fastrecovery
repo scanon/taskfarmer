@@ -1,0 +1,109 @@
+#!/usr/bin/perl
+
+# Do a status dot every this many items
+$|=1;
+$CHUNKSIZE=200000;
+$pProg=0;
+$pInput=0;
+$rindex=0;
+
+$EXPECT_REPEATS=0;
+
+open(PROG,$ARGV[0]);
+open(INPUT,$ARGV[1]);
+
+while(!eof(PROG)){
+    $_=<PROG>;
+    $line++;
+    $pProg+=length;
+    chomp;
+    ($seqlist,$host,$time,$lines,$walltime)=split / /; 
+    my @list=split /,/,$seqlist;
+    $sum+=$time;
+    foreach $seq (@list){
+#      print "Prog: :$seq:\n";
+      next if defined $completed{$seq};
+      while(!defined $iheaders{$seq}){
+        printf "read %d from input\n",$rct+=read_input($CHUNKSIZE);
+        printf "Completed %d (max: %d hash size i:%d\n", $completed,$max, scalar keys %iheaders;
+      }
+      $index=$iheaders{$seq};
+      if ($index>$max){
+        $max=$index;
+	$maxoffset=$offsets[$index];
+#        print "New max $max $seq\n";
+      }
+      $completed++;
+      delete $offsets[$index];
+      delete $reverse{$index};
+      delete $iheaders{$seq};
+      $completed{$seq}=1 if $EXPECT_REPEATS;
+    }
+}
+close PROG;
+
+# max and maxoffset correspond to the last sequence that was completed.
+# let's figure out where the next uncompleted sequence starts.
+if (! defined $offsets[$max+1]){
+  read_input($CHUNKSIZE);
+}
+
+
+open(F,"> fastrecovery");
+printf F "# max: %ld %ld\n",$max+1,$offsets[$max+1];
+print "max: $max\n";
+$min=$max;
+$missed=0;
+@indexes=sort {$a <=> $b} keys %reverse;
+# print F "# min: $indexes[0]\n";
+
+foreach $index (@indexes){
+  $seq=$reverse{$index};
+  seek INPUT, $offsets[$index],0;
+  $_=<INPUT>;
+  print F $_;
+  $_=<INPUT>;
+  while(!eof(INPUT) && ! /^>/){
+    print F $_;
+    $_=<INPUT>;
+  }
+    
+#  $index=$iheaders{$seq};
+  if ($index<$max){
+    $missed++;
+  }
+}
+print "Missed: $missed\n";
+close INPUT;
+close F;
+
+#
+# Read in $read number of sequences
+# Compute offset in the file.
+# Store the index and offsets in a hash
+#
+sub read_input{
+  my $read=shift;
+  my $ct=0;
+
+  while ($ct<$read && !eof(INPUT)){
+    $_=<INPUT>;
+    $iProg+=length;
+    while(! /^>/ && ! eof(INPUT)){
+#       print "$iProg: $_";
+       $_= <INPUT>;
+       $iProg+=length;
+     }
+     $offset=$iProg-length;
+     $rindex++;
+     $ct++;
+    ($bl,$header,$rest)=split /[> \r\n]/;
+#    print "Input: :$header:\n";
+    $iheaders{$header}=$rindex;
+    $reverse{$rindex}=$header;
+    $offsets[$rindex]=$offset;
+  }
+  
+  return $ct;
+}
+

@@ -1,0 +1,23 @@
+#!/bin/sh
+#
+#PBS -q regular
+#PBS -V
+
+cd $PBS_O_WORKDIR 
+
+# Optional STAGING SCRIPT
+STAGE=$TF_HOME/examples/stage.sh
+
+# The arguments will be passed to the user application that runs
+# on the compute nodes.
+#
+# The exception is -i which is used by the server for its input.
+#
+# Standard out and error will be collected and printed on the master
+# process.
+#
+tfrun -i $INPUT grep '^>' > output
+
+# Do post processing
+#
+wc -l output

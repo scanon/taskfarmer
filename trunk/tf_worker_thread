@@ -1,0 +1,226 @@
+#!/usr/bin/perl
+#
+# This is the standard run script that is executed on the compute node for each thread.
+# It fetches sequences from a server, runs the app, and pushes back results
+#
+# Author: Shane Canon
+#
+# TODOs:
+# - Improve error handling when writing to the socket
+#
+use IO::Handle;
+use IO::File;
+use IO::Socket::INET;
+use strict;
+
+die "Missing arguments\n" if ( @ARGV <3 );
+
+# Get the SERVER PORT and THREAD
+#
+my $SERVER=$ARGV[0];
+my $PORT=$ARGV[1];
+my $THREAD=$ARGV[2];
+
+# Default TIMEOUT, RETRIES, SLEEP
+my $TIMEOUT=45;
+my $MAX_RETRIES=3;
+my $SLEEP=5;
+
+# This is our work area
+#
+die "TF_TMPDIR not defined\n" if (! defined $ENV{TF_TMPDIR});
+die "TF_TMPDIR doesn't exist\n" if (! -e $ENV{TF_TMPDIR});
+
+my $TMPDIR="$ENV{TF_TMPDIR}/$THREAD";
+my $IGNORE_RETURN=1 if defined $ENV{IGNORE_RETURN};
+
+# Get our ID
+my $ID="unknown";
+$ID=$ENV{ID} if defined $ENV{ID};
+my $input;
+
+mkdir $TMPDIR;
+chdir $TMPDIR or die "Unable to change to $TMPDIR";
+$ENV{TMPDIR}=$TMPDIR;
+
+
+my @args=read_args($SERVER,$PORT);
+if (scalar @args eq 0 ){
+  print STDERR "Connection error to $SERVER($PORT)\nFailed to get args\n";
+  exit -1;
+}
+# The app is the first argument
+#
+my $app=shift @args;
+
+my $step=-1;
+my $status=0;
+while ( ($step=send_and_get($SERVER,$PORT,$step,$status)) >= 0 ){
+# Run the users code
+  $ENV{STEP}=$step;
+  $status=run_application($app,$input,@args);
+}
+if ($step eq -1){
+  print STDERR "Connection Error to $SERVER($PORT)\n";
+}
+elsif ($step eq -2){
+  print STDERR "All done: shutting down on thread $THREAD\n";
+}
+else{
+  print STDERR "Unknown error: ($step)\n";
+}
+
+# Cat all of the files in the work directory
+# Prepend the filename in the message stream
+#
+sub catfiles {
+  my $sock=shift;
+  opendir(DIR, ".") or die "cann't opendir: $!";
+  my @files = readdir(DIR);
+  closedir DIR;
+  foreach (@files){
+    next if ($_ eq "." || $_ eq "..");
+    next if (defined $ENV{GETFILES} && ! /$ENV{GETFILES}/ );
+    next unless (-f $_);
+    print $sock "FILE $_\n";
+    open(F,"$_");
+    while(<F>){
+      print $sock $_;
+    }
+    close F;
+    print $sock "DONE\n";
+    unlink "$TMPDIR/$_";
+  }
+# Cleanup any files in the work directory
+#
+  foreach (@files){
+    unlink $_ if ($_ ne "." && $_ ne "..");
+  }
+}
+
+# Read the args from the server
+#
+sub read_args {
+  my $server=shift;
+  my $port=shift;
+  my @args;
+
+  my $sock=connect_server($server,$port);
+  return if ! $sock; 
+  if ($sock){
+    print $sock "ARGS\n";
+    while(<$sock>){
+      chomp;
+      last if /DONE/;
+      push @args, $_;
+    }
+    close $sock;
+    return @args;
+  }
+   
+}
+
+# Connect to the server
+# Retry a few times before giving up.
+#
+sub connect_server {
+  my $server=shift;
+  my $port=shift;
+  my $retry=0;
+  my $sock;
+
+  while ($retry<$MAX_RETRIES){  
+    $sock = IO::Socket::INET->new(PeerAddr => $server, PeerPort => $port,
+	Timeout => 45,
+	Proto    => 'tcp');
+    return $sock if defined $sock;
+    sleep $SLEEP;
+    $retry++;
+    print STDERR "Retrying connection to $server on $port ($retry)\n" if ($retry<$MAX_RETRIES);
+  }
+  return $sock
+}
+
+# This is the main function to push new output and
+# fetch the next chunk of work.
+#
+sub send_and_get {
+  my $server=shift;
+  my $port=shift;
+  my $step=shift;
+  my $status=shift;
+  my $error=0;
+
+  $error=1 if ($status && ! $IGNORE_RETURN);
+
+  my $sock=connect_server($server,$port);
+  return -1 unless $sock;
+  printf $sock "IDENT %s\n",$ID;
+  if ($step>=0){
+    if ($error){
+      print STDERR "ERROR: step $step exited with $status\n";
+      print STDERR `cat stderr`;
+      if (defined $ENV{DEBUGDIR}){
+        my $ddir="$ENV{DEBUGDIR}/step.$step";
+        mkdir $ddir;
+        print STDERR `ls -l > $ddir/listing.workingdir`;
+        print STDERR `ls -l ../ $ddir/listing.parent`;
+        print STDERR `echo "$input" > $ddir/input`;
+        print STDERR `mv * $ddir/`;
+        die "ERROR";
+      }
+      print $sock "ERROR $step\n";
+    }
+    else{
+      print $sock "RESULTS $step\n";
+      catfiles($sock);
+      print $sock "DONE\n";
+    }
+    $_=<$sock>;
+    $error=1 unless /RECEIVED/;
+  }
+  print $sock "NEXT\n";
+  my $step=<$sock>;
+  $step=~s/STEP: //;
+  chomp $step;
+  return -2 if ($step eq '');  # All done
+  $input="";
+  while(<$sock>){
+    $input.=$_;
+  }
+  close $sock;
+  return $step;
+}
+
+# Run the application
+# Redirect stdout and stderrr to files so they can
+# be pushed back.
+# 
+sub run_application{
+  my $app=shift;
+  my $input=shift;
+
+  open my $oldout, ">&STDOUT" or die "Can't dup STDOUT: $!";
+  open my $olderr, ">&STDERR" or die "Can't dup STDERR: $!";
+  open STDOUT, '>', "stdout" or die "Can't redirect STDOUT: $!";
+  open STDERR, '>', "stderr" or die "Can't redirect STDERR: $!";
+  select STDOUT; $| = 1;
+  select STDERR; $| = 1;
+
+  my $st=open(APP,"|-",$app,@_);
+  if (!$st){
+    print $olderr "Error: not able to execute or find $app ($st)\n";
+    die;
+  }
+# Print the input to the application
+  print APP $input;
+  close APP;
+  my $exit=$?;
+# Restore stdout and stderr
+#
+  open STDOUT, ">&", $oldout or die "Can't dup \$oldout: $!";
+  open STDERR, ">&", $olderr or die "Can't dup \$olderr: $!";
+  close $oldout;
+  close $olderr;
+  return $exit;
+}

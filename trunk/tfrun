@@ -1,0 +1,90 @@
+#!/bin/sh
+
+# Temporary directory for run info
+#
+export TF_DIR=$HOME/.task-farmer.$(hostname).$PBS_JOBID
+export SOCKFILE=$TF_DIR/sockfile
+export PIDFILE=$TF_DIR/tfserver.pid
+
+cleanup () {
+  echo "Shutting down" 1>&2
+  if [ -e $PIDFILE ] ; then
+    kill $(cat $PIDFILE) > /dev/null 2>&1
+    rm $PIDFILE
+  fi
+  [ -e $SOCKFILE ] && rm $SOCKFILE
+  [ -d $TF_DIR ] && rmdir $TF_DIR
+  [ ! -z $USE_RELAY ] && [ $USE_RELAY -eq 2 ] && echo "Stoping relay" && stop_relay
+  exit $STATUS
+}
+trap cleanup 2 15
+
+# Create the TF directory
+#
+if [ ! -e $TF_DIR ] ; then
+  mkdir $TF_DIR
+else
+  [ -e $PIDFILE ] && echo "Server may already be running." 1>&2 && exit
+fi
+
+# Source the configuration file
+[ -z $TF_HOME ] && export TF_HOME=$(dirname $0|sed 's/bin$//')
+[ -z $TF_CONFDIR ] && TF_CONFDIR=$TF_HOME/share/taskfarmer
+if [ -e $TF_CONFDIR/$NERSC_HOST.conf ] ; then
+  . $TF_CONFDIR/$NERSC_HOST.conf
+else
+  echo "The Task Farmer is not currently supported on this system."
+  exit
+fi
+
+# Get the address for the server
+#
+if [ -z $TF_ADDR ] && [ -z $TF_PORT ] ; then
+  export TF_ADDR=$(/sbin/ifconfig $INT|grep 'inet addr'|awk -F: '{print $2}'|sed 's/ .*//')
+
+# Start the server and record the PID
+#
+  if [ $(basename $0) = "tfrun" ] ; then
+    $TF_HOME/libexec/taskfarmer/tf_server "$@" &
+  else
+    base=$(basename $0|sed 's/tf$//')
+    APP=$(which $base 2>/dev/null) || (echo "Unable to find $base")
+    [ -z $APP ] && exit
+    echo "Will run $APP"
+    $TF_HOME/libexec/taskfarmer/tf_server $APP "$@" &
+  fi
+  echo $! > $PIDFILE
+#
+# Wait for the socket file to exist.
+#
+  while [ ! -e $SOCKFILE ] ; do
+    sleep 1
+  done
+  TF_PORT=$(cat $SOCKFILE)
+else
+  echo "Server defined.  Will contact $TF_ADDR:$TF_PORT"
+  [ ! -z USE_RELAY ] && USE_RELAY=2 && echo "Starting relay" && start_relay
+fi
+
+if [ -z $SERVER_ONLY ] ; then
+# Launch the clients
+#
+  run_one
+# Get exit status for aprun
+#
+  STATUS=$?
+  [ ! -z $USE_RELAY ] && [ $USE_RELAY -eq 2 ] && echo "Stoping relay" && stop_relay
+
+else
+  echo "Starting in server only mode." 1>&2
+  echo "Cut and paste..." 1>&2
+  echo "TF_ADDR=$TF_ADDR TF_PORT=$TF_PORT tfrun" 1>&2
+  wait $(cat $PIDFILE)
+  STATUS=$?
+fi
+
+# Kill the server (just in case)
+[ -e $PIDFILE ] && kill $(cat $PIDFILE) > /dev/null 2>&1
+[ -e $PIDFILE ] && rm $PIDFILE
+[ -e $SOCKFILE ] && rm $SOCKFILE
+exit $STATUS

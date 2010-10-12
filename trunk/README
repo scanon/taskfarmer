@@ -1,0 +1,58 @@
+Task Farmer
+===========
+
+This is task farmer framework designed to distribute fasta data to many worker nodes.  It is primarily used
+to run BLAST in parallel, but it can be used for other bio applications as well.  
+
+An application is a candidate for the task farmer if it:
+* Can read in fasta input in arbitrary chunks 
+* The order of the ouptut doesn't matter 
+
+Quick Start Guide
+=================
+
+1. Add the Techint module area to your modulepath
+
+export MODULEPATH=$MODULEPATH:/global/common/carver/tig/Modules/modulefiles/
+or 
+setenv MODULEPATH $MODULEPATH:/global/common/carver/tig/Modules/modulefiles/
+
+2. Load the module
+
+module load taskfarmer
+
+3. Start an interactive parallel job or submit a script using tfrun
+
+qsub -I -l mppwidth=256,mppnppn=4
+
+4. Use tfrun or blasttf to start the jobs.  Specify the input using -i <file>.  The rest of the command
+   is the serial program to run.  The serial program must read from stdin.  See notes below if
+   your application expects to read input from a file.
+
+tfrun -i input.faa blastall -p blastp -d $SCRATCH/db/refGenomes.faa -F 'm S'  -e 1e-2 -b 2000 -z 700000000  -m 8 -o blastp.out.m8.txt
+
+5. Wait for the job to complete.  Run the same command to resume a job that died or was killed.
+
+
+
+Caveats and Suggestions  (READ THIS!!)
+======================================
+1. Write output into the local directory if possible.  The server will automatically
+   gather any files created in the local directory and pipe them back to the server.
+   If you write to a different area, the output will not get collected.
+
+2. Avoid changing directories. (See 1).  Also you could start to overwrite output from one task with another.
+
+3. Ordering will not be preserved.  The assumption is the order doesn't matter.
+
+4. If you need to read from a file instead of stdin, then write a wrapper script.  For example...
+
+   #!/bin/sh
+
+   cat > tmp.$$
+   myapp -i tmp.$$ $@
+   rm tmp.$$
+
+  Don't forget to cleanup the temporary input file or it will get collected and sent back to the server.
+
+

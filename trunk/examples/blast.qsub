@@ -1,0 +1,14 @@
+#!/bin/sh
+#
+#PBS -q regular
+#PBS -l mppwidth=256,mppnppn=4,walltime=15:00
+#PBS -V
+
+cd $PBS_O_WORKDIR 
+
+# Specify the entire path to the database
+#
+DB=$SCRATCH/db/refGenomes.faa
+
+blasttf -i new.faa -p blastp -d $DB -F 'm S'  -e 1e-2 -b 2000 -z 700000000  -m 8 -o output.m8.txt
+
