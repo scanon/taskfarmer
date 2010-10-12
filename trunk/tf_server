@@ -6,6 +6,7 @@ use IO::File;
 use IO::Socket::INET;
 use strict;
 use Getopt::Long;
+use Data::Dumper;
 
 my $input;
 
@@ -23,12 +24,17 @@ my $TIMEOUT_SOCKET;
 my $MAXRETRY=8;
 my $MAXBUFF=100*1024*1024;  # 100M buffer
 my $FLUSHTIME=20;
+my $WINDOWTIME=$FLUSHTIME;
 my $FR_FILE="fastrecovery.$inputfile";
 
 # Override defaults
 $BATCHSIZE=$ENV{BATCHSIZE} if defined $ENV{BATCHSIZE};
 $TIMEOUT=$ENV{SERVER_TIMEOUT} if defined $ENV{SERVER_TIMEOUT};
-$TIMEOUT_SOCKET=$ENV{TIMEOUT_SOCKET} if defined $ENV{TIMEOUT_SOCKET};
+$TIMEOUT_SOCKET=$ENV{SOCKET_TIMEOUT} if defined $ENV{SOCKET_TIMEOUT};
+my $template=$ENV{TEMPLATE};
+my $statusfile=$ENV{STATUSFILE};
+
+die "Template doesn't exist!" if (defined $template && ! -e $template);
 
 #  Global vars
 #
@@ -42,6 +48,7 @@ my $item;
 my $offset;
 my $index;
 my $next_flush=time+$FLUSHTIME;
+my $next_status=time+$FLUSHTIME;
 my $next_check=time+$TIMEOUT;
 my $processed=0;
 my $buffer_size=0;
@@ -70,10 +77,15 @@ if (defined $ENV{SOCKFILE}){
 
 my $item=0;
 my $remaining_jobs=1;
-my $remaining_seq=1;
+my $remaining_inputs=1;
 my $shutdown=0;
 my $ident;
 my $command;
+my $counters;
+
+initialize_counters($counters);
+my @stati=stat $inputf;
+$counters->{size}=$stati[7];
 
 open(PROGRESS,">> ./progress.$inputfile");
 open(ERROR,">> ./error.$inputfile");
@@ -83,31 +95,32 @@ select STDOUT;
 $SIG{INT} = \&catch_int;  # best strategy
 
 # This is the main work loop.
-while ($remaining_jobs || $remaining_seq){
+while ($remaining_jobs || $remaining_inputs){
   my $new_sock=$sock->accept();
   if (defined $new_sock){
     my $clientaddr=$new_sock->peerhost();
-    my $send_query=do_request($new_sock);
+    my $status=do_request($new_sock);
 
-#
-# Do we need to send a query?  Make sure we aren't in a shutdown.
-#
-    send_query($new_sock) if ($send_query && ($shutdown==0 || $remaining_seq!=0) );
     close $new_sock;
   }
   check_timeouts() if (time>$next_check);
   flush_output() if (time>$next_flush || $buffer_size > $MAXBUFF);
-  $remaining_seq=(scalar @ondeck);
+  if (time>$next_status){
+    print stderr "dumping status\n";
+    update_counters($counters,\%job,\%input,\@ondeck,$statusfile);
+    delete_olddata(\%job,\%input);
+  }
+  
+  $remaining_inputs=(scalar @ondeck);
   if ( eof($inputf) || $shutdown){
     $shutdown=1;                      # In case eof got us here.
-    $remaining_jobs=keys %job;             # How much pending stuff is there?
-    print LOG "Draining: $remaining_jobs remaining connections.  $remaining_seq remaining inputs\n";
+    $remaining_jobs=remaining_jobs(\%job);             # How much pending stuff is there?
+    print LOG "Draining: $remaining_jobs remaining connections.  $remaining_inputs remaining inputs\n";
   }
 }
+update_counters($counters,\%job,\%input,\@ondeck,$statusfile);
 
-foreach my $seq (@ondeck){
-  print stderr "bad seq in ondeck: $seq\n" if (!defined $seq || $seq eq '^$');
-}
+check_inputs(@ondeck);
 
 print LOG "Doing final flush\n";
 flush_output();
@@ -123,10 +136,12 @@ close LOG;
 #
 sub catch_int {
   my $signame = shift;
+  print stderr "Caught signal $signame ($shutdown)\n";
+  sleep 10 if $shutdown eq 2;
   if ($shutdown){
     flush_output();
     foreach my $file (keys %output){
-      $output{$file}->{handle}->close();
+      $output{$file}->{handle}->close() if defined $output{$file}->{handle};
     }
     print LOG "Exiting\n";
     close PRROGRESS;
@@ -136,11 +151,12 @@ sub catch_int {
     exit;
   }
   else{
-    $shutdown=1;
+    $shutdown=2;
     flush_output();
-    $remaining_jobs=keys %job;
+    $remaining_jobs=remaining_jobs(\%job);
     print LOG "Shutting down on signal $signame\n";
     print LOG "Draining: $remaining_jobs remaining connections\n";
+    $shutdown=1;
   }
 }
 
@@ -151,7 +167,7 @@ sub do_request{
 #  print "Connect from $clientaddr\n";
 
   my $got_response=0;
-  my $send_query=0;
+  my $status=0;
   $ident="noid";
 # Read from client.  Process requests and reponse.
 #
@@ -177,7 +193,10 @@ sub do_request{
       ($command,$ident)=split;
     }
     elsif (/^NEXT$/){
-      $send_query=1;
+      if ($shutdown && ! $remaining_inputs){
+        print $sock "SHUTDOWN\n";
+      }
+      send_work($sock);
       last;
     }
     elsif (/^ARGS$/){
@@ -196,6 +215,7 @@ sub do_request{
       print stderr "ERROR: Job step $jstep\n";
       print ERROR "ERROR: Job step $jstep\n";
       print $sock "RECEIVED $jstep\n";
+      $counters->{errors}++;
       requeue_job($jstep);
     }
     else{
@@ -203,7 +223,7 @@ sub do_request{
     }
   }
 
-  return $send_query;
+  return $status;
 }
 
 # Read file output from client
@@ -244,17 +264,21 @@ sub process_results{
 
   if (defined ($job{$jstep})){
     my $inputs=join ",",@{$job{$jstep}->{list}};
+    my $rtime=time-$job{$jstep}->{start};
+    $job{$jstep}->{time}=$rtime;
+    $job{$jstep}->{finish}=time;
+    $job{$jstep}->{ident}=$ident;
     $progress_buffer.=sprintf "%s %s %d %d %d %d\n", 
-	$inputs,$ident,time-$job{$jstep}->{start},
+	$inputs,$ident,$rtime
 	$job{$jstep}->{lines},time,$job{$jstep}->{len};
-    printf LOG "Recv: %d seq:%25s hostid:%-10s  time:%-4ds lines: %-6d proc: %d\n", 
+    printf LOG "Recv: %d input:%25s hostid:%-10s  time:%-4ds lines: %-6d proc: %d\n", 
 	$jstep, substr($inputs,0,25),$ident,
-	time-$job{$jstep}->{start},$job{$jstep}->{lines},$processed;
+	$rtime,$job{$jstep}->{lines},$processed;
     foreach my $inputid (@{$job{$jstep}->{list}}){
-      delete $input{$inputid};
+      $input{$inputid}->{status}='completed';
     }
     $processed+=$job{$jstep}->{count};
-    delete $job{$jstep};
+#    delete $job{$jstep};
     return 1;
   }
   else{
@@ -262,7 +286,7 @@ sub process_results{
   }
 }
 
-sub send_query{
+sub send_work{
   my $new_sock=shift;
 
   my $sent=[];
@@ -274,20 +298,27 @@ sub send_query{
 #
   if (scalar @list > 0){
     print $new_sock "STEP: $item\n";
-    foreach my $seq (@list){
-      print $new_sock $input{$seq}->{input};
-      push @{$sent}, $seq;
-      $length+=length $input{$seq}->{input};
+    foreach my $inputid (@list){
+      print $new_sock $input{$inputid}->{input};
+      $input{$inputid}->{status}='in progress';
+      push @{$sent}, $inputid;
+      $length+=length $input{$inputid}->{input};
       $ct++;
     }
 # Save info about the job step.
 #
     $job{$item}->{start}=time;
+    $job{$item}->{finish}=0;
+    $job{$item}->{time}=0;
     $job{$item}->{len}=$length;
     $job{$item}->{list}=$sent; 
     $job{$item}->{count}=$ct; 
     print LOG "Sent: $item hostid:$ident length:$length\n";
     $item++;
+  }
+  else{
+# If no work then send a shutdown
+    print $new_sock "SHUTDOWN";
   }
 }
 
@@ -295,7 +326,6 @@ sub send_query{
 # This tries to keep everything in a consistent state.
 #
 sub flush_output{
-
   foreach my $file (keys %output){
     next if ($file eq 'stdout' || $file eq 'stderr');
     if ( ! defined $output{$file}->{handle} ){
@@ -309,6 +339,7 @@ sub flush_output{
     $handle->flush();
     $output{$file}->{buffer}='';
   }
+  flush LOG;
   print PROGRESS $progress_buffer; 
   flush PROGRESS;
   flush ERROR;
@@ -345,15 +376,28 @@ sub build_list{
   return @list;
 }
 
+sub remaining_jobs{
+  my $j=shift;
+  my $c=0;
+  foreach my $jid (keys %{$j}){
+    next if $j->{$jid}->{finish};
+    $c++;
+  }
+  print stderr "Remaining jobs: $c\n";
+  return $c;
+}
+
 # Look for old inflight messages.
 # Move to retry queue
 #
 sub check_timeouts{
   my $time=time-$TIMEOUT;
   foreach my $jstep (keys %job){
+    next if $job{$jstep}->{finish};
     if ($job{$jstep}->{start}<$time){
       print LOG "RETRY: $jstep timed out.  Adding to retry.\n";
       requeue_job($jstep);
+      $counters->{timeouts}++;
     }
   }
   $next_check=time+$TIMEOUT/2;
@@ -370,9 +414,10 @@ sub requeue_job{
     printf LOG "Retrying %s for %d time\n",$inputid,$input{$inputid}->{retry};
     if ($input{$inputid}->{retry} < $MAXRETRY){
       unshift @ondeck,$inputid;
+      $input{$inputid}->{status}='retry';
     }
     else{
-      print stderr "MAX:  $inputid hit max retries\n";
+      print stderr "ERROR:  $inputid hit max retries\n";
       print ERROR "FAILED: $inputid hit max retries\n";
       push @failed,$inputid;
     }
@@ -407,6 +452,7 @@ sub read_input{
       $input{$id}->{retry}=0;
       $input{$id}->{offset}=$id;
       $input{$id}->{index}=$index;
+      $input{$id}->{status}='ondeck';
       push @list,$id;
     }
     else{
@@ -447,6 +493,7 @@ sub fast_recovery{
 
 sub check_inputs{
   foreach my $inputid (@_){
+    print stderr "Bad inputid: $inputid\n" if (!defined $inputid || $inputid eq '^$');
     die "Bad input in retry $inputid\n\n$input{$inputid}->{input}\n" unless $input{$inputid}->{input}=~/^>/;
   }
 }
@@ -472,10 +519,13 @@ sub write_fastrecovery{
   my $inputid;
   my $ct=0;
 
+# Add failed jobs to the recovery list
+
   push @recoverylist,@failed;
 
-# Print out anything on retry queue
+# What's in progress
   foreach my $jstep (keys %job){
+    next if $job{$jstep}->{finish};
     foreach $inputid (@{$job{$jstep}->{list}}){
       push @recoverylist,$inputid;
     }
@@ -495,4 +545,59 @@ sub write_fastrecovery{
   link $filename.".new", $filename or die "Unable to move $filename.new\n";
   unlink $filename.".new";
   return $ct;
+}
+
+
+sub initialize_counters{
+  my $c=shift; 
+  my @list=('bytes_in','bytes_out','timeouts','errors');
+  for my $field (@list){
+    $c->{$field}=0;
+  }
+}
+
+sub update_counters{
+  my $c=shift;
+  my $j=shift;
+  my $i=shift;
+  my $od=shift;
+  my $cf=shift;
+ 
+  $c->{bytes_in}=tell $inputf;
+  $c->{inflight}=keys %{$j};
+  $c->{ondeck}=scalar @{$od};
+
+  $output=open(CF,"> $cf.new");
+  print CF "\n\n[Jobs]\n" if $output;
+  foreach my $jid (keys %{$j}){
+    printf CF "jobid: %d (finish=%s)\n",$jid,$j->{$jid}->{finish} if $output;
+  }
+
+  my $inflight=0;
+  print CF "\n\n[inflight]\n" if $output;
+  foreach my $id (sort keys %{$i}){
+    print CF "input: $id $i->{$id}->{status}\n" if $output;
+    $inflight++ if $i->{$id}->{status} eq 'in progress';
+  }
+  $c->{inflight}=$inflight;
+  printf CF "\n\n[Global]\n" if $output;
+  foreach (sort keys %{$c}){
+    printf CF "%s:%d\n",$_,$c->{$_} if $output;
+  }
+  close CF;
+  open(DUMP,"> data.dump");
+  print DUMP Dumper($c,$j,$i,$od) if $output;
+  close DUMP;
+
+}
+
+sub delete_olddata{
+  my $j=shift;
+  my $i=shift;
+  foreach my $jid (keys %{$j}){
+    delete $j->{$jid} if $j->{$jid}->{finish} > time+120 ;
+  }
+  foreach my $id (sort keys %{$i}){
+    delete $i->{$id} if $i->{$id} && $i->{$id}->{status} eq 'completed';
+  }
 }

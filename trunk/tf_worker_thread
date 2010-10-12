@@ -12,6 +12,7 @@ use IO::Handle;
 use IO::File;
 use IO::Socket::INET;
 use strict;
+my $DEBUG=0;
 
 die "Missing arguments\n" if ( @ARGV <3 );
 
@@ -46,7 +47,7 @@ $ENV{TMPDIR}=$TMPDIR;
 
 my @args=read_args($SERVER,$PORT);
 if (scalar @args eq 0 ){
-  print STDERR "Connection error to $SERVER($PORT)\nFailed to get args\n";
+  print STDERR "$ID: Connection error to $SERVER($PORT)\nFailed to get args\n";
   exit -1;
 }
 # The app is the first argument
@@ -61,13 +62,13 @@ while ( ($step=send_and_get($SERVER,$PORT,$step,$status)) >= 0 ){
   $status=run_application($app,$input,@args);
 }
 if ($step eq -1){
-  print STDERR "Connection Error to $SERVER($PORT)\n";
+  print STDERR "$ID: Connection Error to $SERVER($PORT)\n";
 }
 elsif ($step eq -2){
-  print STDERR "All done: shutting down on thread $THREAD\n";
+  print STDERR "$ID: All done: shutting down on thread $THREAD\n";
 }
 else{
-  print STDERR "Unknown error: ($step)\n";
+  print STDERR "$ID: Unknown error: ($step)\n";
 }
 
 # Cat all of the files in the work directory
@@ -136,7 +137,7 @@ sub connect_server {
     return $sock if defined $sock;
     sleep $SLEEP;
     $retry++;
-    print STDERR "Retrying connection to $server on $port ($retry)\n" if ($retry<$MAX_RETRIES);
+    print STDERR "$ID: Retrying connection to $server on $port ($retry)\n" if ($retry<$MAX_RETRIES);
   }
   return $sock
 }
@@ -158,7 +159,7 @@ sub send_and_get {
   printf $sock "IDENT %s\n",$ID;
   if ($step>=0){
     if ($error){
-      print STDERR "ERROR: step $step exited with $status\n";
+      print STDERR "$ID: ERROR: step $step exited with $status\n";
       print STDERR `cat stderr`;
       if (defined $ENV{DEBUGDIR}){
         my $ddir="$ENV{DEBUGDIR}/step.$step";
@@ -181,12 +182,19 @@ sub send_and_get {
   }
   print $sock "NEXT\n";
   my $step=<$sock>;
-  $step=~s/STEP: //;
   chomp $step;
-  return -2 if ($step eq '');  # All done
-  $input="";
-  while(<$sock>){
-    $input.=$_;
+  if ($step=~/STEP/){
+    $step=~s/STEP: //;
+    print STDERR "$ID: Got Step: $step\n" if $DEBUG;
+    return -2 if ($step eq '');  # All done
+    $input="";
+    while(<$sock>){
+      $input.=$_;
+    }
+  }
+  else{
+    print stderr "$ID: Got Shutdown ($step)\n";
+    $step=-2;
   }
   close $sock;
   return $step;
