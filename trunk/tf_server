@@ -269,7 +269,7 @@ sub process_results{
     $job{$jstep}->{finish}=time;
     $job{$jstep}->{ident}=$ident;
     $progress_buffer.=sprintf "%s %s %d %d %d %d\n", 
-	$inputs,$ident,$rtime
+	$inputs,$ident,$rtime,
 	$job{$jstep}->{lines},time,$job{$jstep}->{len};
     printf LOG "Recv: %d input:%25s hostid:%-10s  time:%-4ds lines: %-6d proc: %d\n", 
 	$jstep, substr($inputs,0,25),$ident,
@@ -562,6 +562,7 @@ sub update_counters{
   my $i=shift;
   my $od=shift;
   my $cf=shift;
+  my $output;
  
   $c->{bytes_in}=tell $inputf;
   $c->{inflight}=keys %{$j};
