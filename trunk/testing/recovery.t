@@ -4,16 +4,14 @@
 export NERSC_HOST=test
 
 if [ $# -eq 0 ] ; then
-  export TF_HOME=/tmp/tf.$$
-  (cd ../;make install prefix=$TF_HOME)
-  export TFILE=test.faa
+  . functions.t
+  setup
+  cleanup
   export SERVER_TIMEOUT=1
   export SOCKET_TIMEOUT=1
-  export STATUSFILE=status
 
   export ARG_OUT=`pwd`/test.args
 
-  rm *.$TFILE $ARG_OUT
   echo "Starting server.  This will get killed as part of test."
   export LOOP=1
   $TF_HOME/bin/tfrun -i $TFILE `pwd`/$0 arg1 arg2 'a b' > test.out 2> test.err
@@ -22,10 +20,8 @@ if [ $# -eq 0 ] ; then
   echo "Restarting server"
   $TF_HOME/bin/tfrun -i $TFILE `pwd`/$0 arg1 arg2 'a b' >> test.out 2>> test.err
 
-# Everything has ran.  Now let's see how it did
+# Everything has ran.  Now let us see how it did
   echo "Checking Results"
-  [ $(cat $ARG_OUT|wc -l) -eq 3 ] || echo "Error: incorrect number of args"
-  [ $(grep -c 'a b' $ARG_OUT) -eq 1 ] || echo "Error: didn't read arg with space"
   PLINES=$( cat progress.$TFILE |sed 's/,/\n/g'|wc -l)
   ELINES=$( grep -c '^>' $TFILE)
   [ $PLINES -eq $ELINES ] || echo "Didn't process all lines $PLINES vs $ELINES"
@@ -38,12 +34,7 @@ else
   OUT=$(wc)
 
 # Get ARGS
-  if [ $STEP -eq 0 ] && [ $LOOP -eq 1 ] ; then
-    for i in "$@" ; do
-      echo $i  >> $ARG_OUT
-    done
-# Test timeout
-  elif [ $STEP -eq 2 ] && [ $LOOP -eq 1 ] ; then
+  if [ $STEP -eq 2 ] && [ $LOOP -eq 1 ] ; then
     sleep 3
 # Test max retry
 #
@@ -54,7 +45,7 @@ else
     kill -INT $(cat $PIDFILE)
     sleep 1
     exit 1;
-# Let's try to test the last step
+# Let us try to test the last step
   elif [ $STEP -eq 46 ] && [ $LOOP -eq 2 ] ; then 
     sleep 3
   fi

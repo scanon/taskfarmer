@@ -1,0 +1,130 @@
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Transitional//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-transitional.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+  <head>
+    <meta http-equiv="Content-Type" content="text/html; charset=iso-8859-1">
+    <title>Task Farmer Status</title>
+    <style type=\"text/css\">
+      td {font-family: Arial, Helvetica, sans-serif; font-size: 12px}
+      h2 {font-family: Arial, Helvetica, sans-serif; font-size: 14px}
+      a {font-family: Arial, Helvetica, sans-serif; font-size: 12px; text-decoration: none; color: #0066CC}
+      a.test { font-weight: bold; }
+      font {font-family: Arial, Helvetica, sans-serif; font-size: 12px; color: #0066CC}
+      font.em {font-family: Arial, Helvetica, sans-serif; font-size: 12px; color: #993300 }
+      .style1 {
+      color: #FFFFFF;
+      font-weight: bold;
+      font-size: 14px;
+      }
+      .req {		color:#c00;
+      }
+      .list {
+      list-style:none
+      }
+    </style>
+    <!--[if IE]><script language="javascript" type="text/javascript" src="jquery/excanvas.js"></script><![endif]-->
+    <script type="text/javascript" src="http://ajax.googleapis.com/ajax/libs/jquery/1.4/jquery.min.js"></script>
+    <script type="text/javascript" src="jquery/jquery.jqplot.min.js"></script>
+    <script type="text/javascript" src="jquery/jquery.url.min.js"></script>
+    <script type="text/javascript" src="jquery/plugins/jqplot.cursor.min.js"></script>
+    <script type="text/javascript" src="jquery/plugins/jqplot.dateAxisRenderer.min.js"></script>
+    <script type="text/javascript" src="jquery/jquery.dataTables.min.js"></script>
+    <link rel="stylesheet" type="text/css" href="jquery/jquery.jqplot.css" />
+    <link rel="stylesheet" type="text/css" href="css/demo_table_jui.css" />
+    <link rel="stylesheet" type="text/css" href="css/demo_page.css" />
+    <link type="text/css" href="http://portal.nersc.gov/project/pma/jquery/ui/themes/base/jquery.ui.all.css" rel="stylesheet" />
+    <script type="text/javascript" src="http://portal.nersc.gov/project/pma/jquery/ui/jquery.ui.core.js"></script>
+    <script type="text/javascript" src="http://portal.nersc.gov/project/pma/jquery/ui/jquery.ui.widget.js"></script>
+    <script type="text/javascript" src="http://portal.nersc.gov/project/pma/jquery/ui/jquery.ui.mouse.js"></script>
+    <script type="text/javascript" src="http://portal.nersc.gov/project/pma/jquery/ui/jquery.ui.button.js"></script>
+    <script type="text/javascript" src="http://portal.nersc.gov/project/pma/jquery/ui/jquery.ui.draggable.js"></script>
+    <script type="text/javascript" src="http://portal.nersc.gov/project/pma/jquery/ui/jquery.ui.position.js"></script>
+    <script type="text/javascript" src="http://portal.nersc.gov/project/pma/jquery/ui/jquery.ui.resizable.js"></script>
+    <script type="text/javascript" src="http://portal.nersc.gov/project/pma/jquery/ui/jquery.ui.dialog.js"></script>
+
+
+    
+   <script type="text/javascript" src="tfs.js"></script>
+   </head>
+  
+  <body>
+    
+    <table cellpadding="5" width="1024" border="0">
+      <!-- tr>
+	<td colspan="2">  
+	  <div id="debugId" style="margin-top:20px; margin-left:20px; width:600px; height:100px;">For debugging</div>
+	</td>
+      </tr -->
+      <tr>
+        <td align="left">
+	  <h2>Task Farmer Status</h2>
+        </td>
+        <td align="right">
+    <input type="button" value="Help" onclick="$.tfs.doHelp();"/>
+    <div id="help"  title="Help Text">
+      <p>
+	Help Text...Update
+      </p>
+      </div>
+    </div>
+        </td>
+      </tr>
+      <tr>
+	<td colspan='2'>  
+	  <table cellpadding="5" width="1024" border="0">
+            <tr>
+	      <td colspan='2'>
+	      </td>
+	    </tr>
+            <tr>
+              <td align="left">
+		<table>
+		  <tr>
+		    <td colspan="2" bgcolor='#449944' align="center">Current Stats
+		    </td>
+		  </tr>
+		  <tr>
+		    <td align="right">
+		      <label for="Counts">Counts:</label>
+		    </td>
+		    <td align="left">
+		      <div id="TotalCount">_</div>
+		    </td>
+		  </tr>
+		  <tr>
+		    <td align="right">
+		      <label for="BytesIn">Bytes In:</label>
+		    </td>
+		    <td align="left">
+		      <div id="TotalBytesIn">_</div>
+		    </td>
+		  </tr>
+		  <tr>
+		    <td align="right">
+		      <label for="BytesOut">Bytes Out:</label>
+		    </td>
+		    <td align="left">
+		      <div id="TotalBytesOut">_</div>
+		    </td>
+		  </tr>
+		  <tr>
+		    <td>
+		      <input type="button" value="Pause" onclick="$.tfs.pause();"/>
+		    </td>
+		    <td>
+		      <input type="button" value="Continue" onclick="$.tfs.resume();"/>
+		    </td>
+		  </tr>
+		</table>
+	      </td>
+              <td align="right">
+		<div id="data" style="margin-top:20px; margin-left:20px; width:600px; height:200px;"></div>
+              </td>
+            </tr>
+	  </table>
+	</td>
+      </tr>
+    </table>
+    <table cellpadding="0" cellspacing="0" border="0" class="display" id="jobTable"></table>
+    
+  </body>
+</html>

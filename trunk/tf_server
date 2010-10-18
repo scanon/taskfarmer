@@ -83,9 +83,10 @@ my $ident;
 my $command;
 my $counters;
 
-initialize_counters($counters);
+initialize_counters($counters,$WINDOWTIME);
 my @stati=stat $inputf;
 $counters->{size}=$stati[7];
+$counters->{quantum}=$WINDOWTIME;
 
 open(PROGRESS,">> ./progress.$inputfile");
 open(ERROR,">> ./error.$inputfile");
@@ -107,7 +108,8 @@ while ($remaining_jobs || $remaining_inputs){
   flush_output() if (time>$next_flush || $buffer_size > $MAXBUFF);
   if (time>$next_status){
     print stderr "dumping status\n";
-    update_counters($counters,\%job,\%input,\@ondeck,$statusfile);
+    update_counters($counters,\%job,\%input,\@ondeck);
+    write_stats($counters,\%job,\%input,\@ondeck,$statusfile) if defined $statusfile;
     delete_olddata(\%job,\%input);
   }
   
@@ -118,7 +120,8 @@ while ($remaining_jobs || $remaining_inputs){
     print LOG "Draining: $remaining_jobs remaining connections.  $remaining_inputs remaining inputs\n";
   }
 }
-update_counters($counters,\%job,\%input,\@ondeck,$statusfile);
+update_counters($counters,\%job,\%input,\@ondeck);
+write_stats($counters,\%job,\%input,\@ondeck,$statusfile) if defined $statusfile;
 
 check_inputs(@ondeck);
 
@@ -177,13 +180,13 @@ sub do_request{
       my ($command,$jstep)=split;
       chomp $jstep;
       my $expected=defined $job{$jstep};
-      my $lines=0;
+      my $bytes=0;
       while (<$sock>){
         last if /^DONE$/;
-        $lines+=read_file($sock,$_,$expected) if /^FILE /;
+        $bytes+=read_file($sock,$_,$expected) if /^FILE /;
       }
       if (defined $job{$jstep}){
-        $job{$jstep}->{lines}=$lines;
+        $job{$jstep}->{bytesout}=$bytes;
       }
       print $sock "RECEIVED $jstep\n";
       my $status=process_results($jstep);
@@ -234,7 +237,7 @@ sub read_file{
   my $write=shift;
 
   my $clientaddr=$sock->peerhost();
-  my $lines=0;
+  my $bytes=0;
   my ($command,$file)=split;
   while(<$sock>){
      last if /^DONE$/;
@@ -248,10 +251,10 @@ sub read_file{
      else{
        $output{$file}->{buffer}.=$_;
      }
-     $lines++;
+     $bytes+=length $_;
   }
   $buffer_size+=length $output{$file}->{buffer};
-  return $lines;
+  return $bytes;
 }
 
 # Process results from client.
@@ -270,7 +273,7 @@ sub process_results{
     $job{$jstep}->{ident}=$ident;
     $progress_buffer.=sprintf "%s %s %d %d %d %d\n", 
 	$inputs,$ident,$rtime,
-	$job{$jstep}->{lines},time,$job{$jstep}->{len};
+	$job{$jstep}->{lines},time,$job{$jstep}->{bytesin};
     printf LOG "Recv: %d input:%25s hostid:%-10s  time:%-4ds lines: %-6d proc: %d\n", 
 	$jstep, substr($inputs,0,25),$ident,
 	$rtime,$job{$jstep}->{lines},$processed;
@@ -310,7 +313,7 @@ sub send_work{
     $job{$item}->{start}=time;
     $job{$item}->{finish}=0;
     $job{$item}->{time}=0;
-    $job{$item}->{len}=$length;
+    $job{$item}->{bytesin}=$length;
     $job{$item}->{list}=$sent; 
     $job{$item}->{count}=$ct; 
     print LOG "Sent: $item hostid:$ident length:$length\n";
@@ -550,48 +553,112 @@ sub write_fastrecovery{
 
 sub initialize_counters{
   my $c=shift; 
+  my $q=shift;
   my @list=('bytes_in','bytes_out','timeouts','errors');
   for my $field (@list){
     $c->{$field}=0;
   }
+  $c->{quantum}=$q;
+  
 }
+
 
 sub update_counters{
   my $c=shift;
   my $j=shift;
   my $i=shift;
   my $od=shift;
-  my $cf=shift;
   my $output;
  
-  $c->{bytes_in}=tell $inputf;
-  $c->{inflight}=keys %{$j};
+  $c->{bytesin}=tell $inputf;
   $c->{ondeck}=scalar @{$od};
 
-  $output=open(CF,"> $cf.new");
-  print CF "\n\n[Jobs]\n" if $output;
   foreach my $jid (keys %{$j}){
-    printf CF "jobid: %d (finish=%s)\n",$jid,$j->{$jid}->{finish} if $output;
+    my $job=$j->{$jid};
+    if ($job->{finish} > $c->{last_update}){
+# time series counters
+      my $epoch=$job->{finish}-$job->{finish}%($c->{quantum});
+      $c->{h_bytesin}->{$epoch}+=$job->{bytesin};
+      $c->{h_bytesout}->{$epoch}+=$job->{bytesout};
+      $c->{h_count}->{$epoch}+=$job->{count};
+# total counters
+      $c->{bytesout}+=$job->{bytesout};
+      $c->{count}+=$job->{count};
+    }
   }
+  $c->{last_update}=time;
 
   my $inflight=0;
-  print CF "\n\n[inflight]\n" if $output;
   foreach my $id (sort keys %{$i}){
-    print CF "input: $id $i->{$id}->{status}\n" if $output;
+    my $in=$i->{$id};
     $inflight++ if $i->{$id}->{status} eq 'in progress';
   }
   $c->{inflight}=$inflight;
-  printf CF "\n\n[Global]\n" if $output;
-  foreach (sort keys %{$c}){
-    printf CF "%s:%d\n",$_,$c->{$_} if $output;
-  }
-  close CF;
-  open(DUMP,"> data.dump");
-  print DUMP Dumper($c,$j,$i,$od) if $output;
-  close DUMP;
 
 }
 
+sub write_stats{
+  my $c=shift;
+  my $j=shift;
+  my $i=shift;
+  my $od=shift;
+  my $cf=shift;
+  my $output;
+  my $data;
+ 
+  $output=open(CF,"> $cf.new");
+  $data->{counters}=$c; 
+  $data->{jobs}=$j; 
+  $data->{input}=$i; 
+  $data->{ondeck}=$od; 
+  open(DUMP,"> data.dump");
+  print DUMP Dumper($data) if $output;
+  close DUMP;
+  return unless $output;
+  print CF "{\"jobs\":[\n" if $output;
+  my $ct=0;
+  foreach my $jid (sort keys %{$j}){
+    print CF ",\n" if $ct;
+    $ct++;
+    my $job=$j->{$jid};
+    printf CF "{\"id\":%d,\"start\":%d,\"finish\":%d,\"bytesin\":%d,\"bytesout\":%d,\"ident\":\"%s\"}",
+        $jid,$job->{start},$job->{finish},$job->{bytesin},$job->{bytesout},$job->{ident};
+  }
+  print CF "],\n";
+
+  print CF "\"inflight\":[\n";
+  my $ct=0;
+  foreach my $id (sort keys %{$i}){
+    my $in=$i->{$id};
+    next unless $i->{status} eq 'in progress';
+    print CF ",\n" if $ct;
+    $ct++;
+    printf CF "{\"id\":\"%s\",\"header\":\"%s\",\"status\":\"%s\"}", $id,$in->{header},$in->{status} if $output;
+  }
+  print CF "],\n";
+  print CF "\"counters\":{";
+  my $ct=0;
+  foreach (sort keys %{$c}){
+    print CF ",\n" if $ct;
+    $ct++;
+    if ( ! ref($c->{$_}) ) {
+      printf CF "\"%s\":%d",$_,$c->{$_};
+    }
+    elsif ( UNIVERSAL::isa($c->{$_},'HASH') ) {
+      printf CF "\"$_\":[";
+      my $ct=0;
+      for my $key (keys %{$c->{$_}}){
+        print CF "," if $ct;
+        $ct++;
+        printf CF "[%d,%d]",$key,$c->{$_}->{$key};
+      }
+      print CF "]";
+    }
+  }
+  print CF "}\n}\n";
+  close CF;
+
+}
 sub delete_olddata{
   my $j=shift;
   my $i=shift;
