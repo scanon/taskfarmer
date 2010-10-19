@@ -242,9 +242,14 @@
 	this.jobtable = function()
 	{
             var rows = [];
+            var maxrows=1000;
+            var i=0;
 	    for( var h in this.valsObj.jobs ){
 	       var job=this.valsObj.jobs[h];
-               rows.push ([ job.id, job.finish-job.start, job.bytesin, job.bytesout, job.ident ]); 
+               if (i < maxrows){
+                 rows.push ([ job.id, job.finish-job.start, job.bytesin, job.bytesout, job.ident ]); 
+                 i++;
+               }
             }
 	    $('#jobTable').dataTable( {
 		"bDestroy" : true,

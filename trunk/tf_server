@@ -20,7 +20,7 @@ $inputfile=~s/.*\///;
 #
 my $BATCHSIZE=32;
 my $TIMEOUT=1800;
-my $TIMEOUT_SOCKET;
+my $TIMEOUT_SOCKET=10;
 my $MAXRETRY=8;
 my $MAXBUFF=100*1024*1024;  # 100M buffer
 my $FLUSHTIME=20;
@@ -107,10 +107,10 @@ while ($remaining_jobs || $remaining_inputs){
   check_timeouts() if (time>$next_check);
   flush_output() if (time>$next_flush || $buffer_size > $MAXBUFF);
   if (time>$next_status){
-    print stderr "dumping status\n";
     update_counters($counters,\%job,\%input,\@ondeck);
     write_stats($counters,\%job,\%input,\@ondeck,$statusfile) if defined $statusfile;
     delete_olddata(\%job,\%input);
+    $next_status=time+$FLUSHTIME;
   }
   
   $remaining_inputs=(scalar @ondeck);
@@ -572,6 +572,13 @@ sub update_counters{
  
   $c->{bytesin}=tell $inputf;
   $c->{ondeck}=scalar @{$od};
+# Initialize epochs
+  my $epoch=time-time%($c->{quantum});
+  if (! defined $c->{h_bytesin}->{$epoch}){
+      $c->{h_bytesin}->{$epoch}=0;
+      $c->{h_bytesout}->{$epoch}=0;
+      $c->{h_count}->{$epoch}=0;
+  }
 
   foreach my $jid (keys %{$j}){
     my $job=$j->{$jid};
@@ -614,6 +621,7 @@ sub write_stats{
   open(DUMP,"> data.dump");
   print DUMP Dumper($data) if $output;
   close DUMP;
+  print stderr "dumping status $output\n";
   return unless $output;
   print CF "{\"jobs\":[\n" if $output;
   my $ct=0;
@@ -658,12 +666,19 @@ sub write_stats{
   print CF "}\n}\n";
   close CF;
 
+# Move the file into place
+  unlink $cf;
+  link $cf.".new", $cf or die "Unable to move $cf.new\n";
+  unlink $cf.".new";
+  chmod 0664, $cf;
+
 }
 sub delete_olddata{
   my $j=shift;
   my $i=shift;
   foreach my $jid (keys %{$j}){
-    delete $j->{$jid} if $j->{$jid}->{finish} > time+120 ;
+    next unless $j->{$jid}->{finish}>0;
+    delete $j->{$jid} if $j->{$jid}->{finish} < time-120 ;
   }
   foreach my $id (sort keys %{$i}){
     delete $i->{$id} if $i->{$id} && $i->{$id}->{status} eq 'completed';
