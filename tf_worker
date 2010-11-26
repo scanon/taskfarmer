@@ -1,87 +1,71 @@
-#!/bin/ksh
+#!/bin/sh
+#
+# This is the standard run script that is executed on the compute node.
+# It fetches sequences from a server using netcat, runs some analysis, and pushes back results
+#
+#
 SERVER=$1
 PORT=$2
-TIMEOUT=45
-TMPDIR=/tmp/$$
-PATH=$PATH:$BASE/bin
-PERL=$BASE/lib/perl5
-MFILE=message
-RFILE=rmess
-TMPRFILE=response
+export TF_TMPDIR=/tmp/$USER-$$
 
-# Cleanup any stale stuff
-rm -rf $TMPDIR
-
-cd /tmp  
-mkdir $TMPDIR
-cd $TMPDIR
-export LD_LIBRARY_PATH=$BASE/lib/
-export PERLLIB=$PERL/site_perl/5.8.8/:$PERL/5.8.8/:$PERL/5.8.8/x86_64-linux-thread-multi
-
-ulimit -m 2048000
-
-
-function cleanup {
-  echo "Called cleanup"
-  cd /tmp
-  rm -rf $TMPDIR
-  exit
-}
-trap cleanup 2 15
-
+# Source any setup files that are needed for the system.
 #
-#
-if [ ! -e $TMPDIR/$DB.pal ] ;then
-  let i=$(cat /proc/cray_xt/nid )%2
-#  if [ $i -eq 0 ] ; then
-#    DBDIR=/scratch/scratchdirs/canon/jgi/nr/
-#  fi
-
-#  ln -s $DBDIR/$DB.* $TMPDIR/
+TF_CONFDIR=$TF_HOME/share/taskfarmer/
+if [ -x $TF_CONFDIR/$NERSC_HOST.stage ] ; then
+  . $TF_CONFDIR/$NERSC_HOST.stage
 fi
 
-eval "$IDCOMMAND"
+mkdir -p $TF_TMPDIR
+cd $TF_TMPDIR
 
-DBDIR=$(echo $DBDIR|sed 's/\//\\\//g')
-BLASTOPTS=$(echo "ARGS"|netcat $SERVER $PORT|sed "s/-d /-d $DBDIR\//")
-
-(echo "IDENT $ID";echo "NEXT")|netcat $SERVER $PORT > $RFILE
-while [ -s ./$RFILE ] ; do
-  STEP=$(grep '^STEP:' $RFILE|sed 's/STEP: //')
-  cat $RFILE|grep -v '^STEP:' > query
-  cat query|blastall -o output $BLASTOPTS -a $THREADS 2>&1
-  RET=$?
-  rm $RFILE query
-  echo "IDENT $ID" > $MFILE
-  if [ $RET ] ; then
-    echo "RESULTS $STEP" >> $MFILE
-    cat output >> $MFILE
-    echo "DONE" >> $MFILE
-  else
-    echo "ERROR $STEP" >> $MFILE
-    sleep 1
-  fi
-  if [ ! -e shutdown ] ; then
-    echo "NEXT" >> $MFILE 
-  fi
-
-# Send Message
- retry=10
- (cat $MFILE)|netcat -w $TIMEOUT $SERVER $PORT > $TMPRFILE
-  while [ $retry -gt 0 ] && [ $(grep -c RECEIVED $TMPRFILE) -eq 0 ] ; do
-    echo "Retrying $retry"
-    (cat $MFILE)|netcat -w $TIMEOUT $SERVER $PORT > $TMPRFILE
-    let retry=retry-1
-    sleep 20
-  done
-
-  if [ -e shutdown ] || [ $retry -eq 0 ] ; then
-    echo "Shutting down"
-    cleanup
-  fi
+# Source the staging file specified by the user if there is one.
 #
-  grep -v RECEIVED $TMPRFILE  > $RFILE
-  rm output $MFILE $TMPRFILE
+if [ ! -z $STAGE ] && [ -x "$STAGE" ] ; then
+  . $STAGE
+fi
+
+# Change back into the temp dir just in case the
+# stager moved us around.
+#
+cd $TF_TMPDIR
+
+# This will be called if an interupt is received.
+#
+cleanup() {
+#  echo "Called cleanup"
+  for pid in $PIDS ; do
+    if [ -d /proc/$pid ] ;then
+      kill $pid
+    fi
+  done
+  sleep 1
+  cd /tmp
+  rm -rf $TF_TMPDIR
+  CLEANUP=1
+  if [ ! -z $STAGE_ONCE ] && [ -x "$STAGE_ONCE" ] ; then
+  . $STAGE_ONCE
+  fi
+  exit
+}
+# Set the trap
+trap cleanup 2 15
+
+# Determine the number of threads
+#
+[ -z $THREADS ] && THREADS=$(grep -c processor /proc/cpuinfo)
+#
+# Run the IDCOMMAND
+eval $IDCOMMAND
+export BID=$ID
+for THREAD in $(seq $THREADS) ; do
+  export ID="$BID-$THREAD"
+  perl $TF_HOME/libexec/taskfarmer/tf_worker_thread $SERVER $PORT $THREAD &
+  PIDS="$PIDS $!"
 done
 
+# Wait for all threads to exit before cleanup
+wait
+
+# Cleanup Cleanup everybody do their share
+#
 cleanup
