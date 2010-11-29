@@ -23,8 +23,8 @@ my $TIMEOUT=1800;
 my $TIMEOUT_SOCKET=10;
 my $MAXRETRY=8;
 my $MAXBUFF=100*1024*1024;  # 100M buffer
-my $FLUSHTIME=20;
-my $WINDOWTIME=$FLUSHTIME;
+my $FLUSHTIME=20;      # write 
+my $WINDOWTIME=60*10;  # 10 minutes
 my $FR_FILE="fastrecovery.$inputfile";
 
 # Override defaults
@@ -87,6 +87,7 @@ initialize_counters($counters,$WINDOWTIME);
 my @stati=stat $inputf;
 $counters->{size}=$stati[7];
 $counters->{quantum}=$WINDOWTIME;
+$counters->{start_time}=time;
 
 open(PROGRESS,">> ./progress.$inputfile");
 open(ERROR,">> ./error.$inputfile");
@@ -316,6 +317,7 @@ sub send_work{
     $job{$item}->{bytesin}=$length;
     $job{$item}->{list}=$sent; 
     $job{$item}->{count}=$ct; 
+    $job{$item}->{ident}=$ident; 
     print LOG "Sent: $item hostid:$ident length:$length\n";
     $item++;
   }
@@ -569,11 +571,12 @@ sub update_counters{
   my $i=shift;
   my $od=shift;
   my $output;
+  my $tss=time-$c->{start_time};
  
   $c->{bytesin}=tell $inputf;
   $c->{ondeck}=scalar @{$od};
 # Initialize epochs
-  my $epoch=time-time%($c->{quantum});
+  my $epoch=int($tss/($c->{quantum}));
   if (! defined $c->{h_bytesin}->{$epoch}){
       $c->{h_bytesin}->{$epoch}=0;
       $c->{h_bytesout}->{$epoch}=0;
@@ -584,7 +587,7 @@ sub update_counters{
     my $job=$j->{$jid};
     if ($job->{finish} > $c->{last_update}){
 # time series counters
-      my $epoch=$job->{finish}-$job->{finish}%($c->{quantum});
+      my $epoch=int(($job->{finish}-$c->{start_time})/($c->{quantum}));
       $c->{h_bytesin}->{$epoch}+=$job->{bytesin};
       $c->{h_bytesout}->{$epoch}+=$job->{bytesout};
       $c->{h_count}->{$epoch}+=$job->{count};
@@ -621,11 +624,11 @@ sub write_stats{
   open(DUMP,"> data.dump");
   print DUMP Dumper($data) if $output;
   close DUMP;
-  print stderr "dumping status $output\n";
+#  print stderr "dumping status\n";
   return unless $output;
   print CF "{\"jobs\":[\n" if $output;
   my $ct=0;
-  foreach my $jid (sort keys %{$j}){
+  foreach my $jid (sort {$a <=> $b} keys %{$j}){
     print CF ",\n" if $ct;
     $ct++;
     my $job=$j->{$jid};
@@ -636,7 +639,7 @@ sub write_stats{
 
   print CF "\"inflight\":[\n";
   my $ct=0;
-  foreach my $id (sort keys %{$i}){
+  foreach my $id (sort {$a <=> $b} keys %{$i}){
     my $in=$i->{$id};
     next unless $i->{status} eq 'in progress';
     print CF ",\n" if $ct;
@@ -655,7 +658,7 @@ sub write_stats{
     elsif ( UNIVERSAL::isa($c->{$_},'HASH') ) {
       printf CF "\"$_\":[";
       my $ct=0;
-      for my $key (keys %{$c->{$_}}){
+      for my $key (sort {$a <=> $b} keys %{$c->{$_}}){
         print CF "," if $ct;
         $ct++;
         printf CF "[%d,%d]",$key,$c->{$_}->{$key};

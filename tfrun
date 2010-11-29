@@ -24,7 +24,12 @@ trap cleanup 2 15
 if [ ! -e $TF_DIR ] ; then
   mkdir $TF_DIR
 else
-  [ -e $PIDFILE ] && echo "Server may already be running." 1>&2 && exit
+  if [ -e $PIDFILE ] && [ -e /proc/$(cat $PIDFILE) ] ; then
+    echo "Server may already be running." 1>&2 && exit
+  else 
+    [ -e $SOCKFILE ] && rm $SOCKFILE
+    rm $PIDFILE
+  fi
 fi
 
 # Source the configuration file
@@ -63,6 +68,7 @@ if [ -z $TF_ADDR ] && [ -z $TF_PORT ] ; then
   TF_PORT=$(cat $SOCKFILE)
 else
   echo "Server defined.  Will contact $TF_ADDR:$TF_PORT"
+  export EXTERNAL_SERVER=1
   [ ! -z USE_RELAY ] && USE_RELAY=2 && echo "Starting relay" && start_relay
 fi
 
@@ -84,7 +90,9 @@ else
 fi
 
 # Kill the server (just in case)
-[ -e $PIDFILE ] && kill $(cat $PIDFILE) > /dev/null 2>&1
-[ -e $PIDFILE ] && rm $PIDFILE
-[ -e $SOCKFILE ] && rm $SOCKFILE
+if [ -z EXTERNAL_SERVER ] ; then
+  [ -e $PIDFILE ] && kill $(cat $PIDFILE) > /dev/null 2>&1
+  [ -e $PIDFILE ] && rm $PIDFILE
+  [ -e $SOCKFILE ] && rm $SOCKFILE
+fi
 exit $STATUS
