@@ -41,9 +41,14 @@
 	     * supplied in the AJAX request. The default value of the 
 	     * is set as bins*interval there and here, as well.
 	     */
-	    interval : 10,
+	    interval : 60,
 	    unused : 0         // so I'm not always worrying about the comma
 	};
+	this.graphList = [
+		{label:"Bytes In",value:"h_bytesin"},
+		{label:"Bytes Out",value:"h_bytesout"},
+		{label:"Counts",value:"h_count"}
+	]
 	this.source = "stats.js";
 	/*
 	 *   The jqplotOptions is what controls a jqplot. Only very generic 
@@ -59,8 +64,6 @@
 		    label:"Time",  
 		    show: true,
 		    autoscale:true,
-		    renderer:$.jqplot.DateAxisRenderer, 
-		    tickOptions:{formatString:"%H:%M"},
 		},
 		yaxis:
 		{
@@ -148,6 +151,27 @@
 	    $.tfs.endWindow = parseInt(nowTimeDate.getTime()/1000) - $.tfs.endDay;
 	}
 
+	this.makeGraphSelector = function()
+        {
+            var graphSelect = document.getElementById("graphSelectId");
+            graphSelect.onchange = function()
+            {
+                /*
+                 *  Enforce at least one selection here.
+                 */
+                $.tfs.get_data();
+            }
+            
+            for( var i = 0; i < $.tfs.graphList.length; i++ )
+            {
+                var st = $.tfs.graphList[i];
+                graphSelect.appendChild( new Option(st.label, st.value) );
+            }
+            if( graphSelect.options.length > 0 )
+            {
+                graphSelect.options[0].selected=true;
+            }
+        }
 	this.makeDialog = function()
 	{
 	    $("#help").dialog({
@@ -166,8 +190,10 @@
 	this.init = function()
 	{
 	    this.setTimeNow();
-            this.source=$.url.param("source")
+            this.source=$.url.param("source");
             $(this.makeDialog);
+            $(this.makeGraphSelector);
+	    $( "#progressbar" ).progressBar();
 	    /*
 	     *   Note that these two invocations need to be registered as callbacks
 	     * (i.e. use the $(callback) technique). I'm not sure why that is, since the
@@ -227,16 +253,67 @@
 	this.graph = function()
 	{
 	    var colors = ["#ff0000", "#0000ff", "#00ff00", "#880000", "#000088", "#008800"];
+            var now = new Date();
+            var graphSelect, labelItem,selectedItem;
 	    /*
 	     *   Initialize latestTime to the current window end in case there is no 
 	     * data in the returned sources. Initialize earliestTime to the window beginning,
 	     * but note that we'll only use this if there is no data at all.
 	     */
-            this.jqplotOptions.title = "Bytes In History";
-	    this.jqplotOptions.series[0].label = "Bytes In"
-	    this.plot = $.jqplot( "data", [this.valsObj.counters.h_bytesin], this.jqplotOptions );
+	    graphSelect = document.getElementById("graphSelectId");
+            labelItem = graphSelect.options[graphSelect.selectedIndex].text;
+            selectedItem = graphSelect.options[graphSelect.selectedIndex].value;
+            this.jqplotOptions.title = labelItem + " History";
+	    this.jqplotOptions.series[0].label = labelItem;
+
+//	    this.jqplotOptions.axes.xaxis.max =  $.tfs.makeTime((now.getTime()/1000));
+//	    this.jqplotOptions.axes.xaxis.min =  $.tfs.makeTime((now.getTime()/1000 - 3600));
+	    this.jqplotOptions.axes.yaxis.min = 0;
+	    this.jqplotOptions.axes.xaxis.min = 0;
+            var length=this.valsObj.counters[selectedItem].length;
+// This is in seconds
+            var quantum=this.valsObj.counters.quantum;
+            this.values=this.valsObj.counters[selectedItem].slice();
+            var maxx=0;
+            for( var i = 0; i < length; i++ ){
+               this.values[i][0]*=(quantum/3600);
+               this.values[i][1]/=(quantum);
+               if (this.values[i][0] > maxx){
+                 maxx=this.values[i][0];
+               }
+            }
+	    this.jqplotOptions.axes.xaxis.max = maxx;
+	    this.plot = $.jqplot( "data", [this.values], this.jqplotOptions );
 	    this.plot.redraw();
 	    window.defaultStatus = this.jqplotOptions.title;
+	}
+
+	this.updatecompletion = function()
+	{
+            var length=this.valsObj.counters.h_bytesin.length;
+// This is in seconds
+            var quantum=this.valsObj.counters.quantum;
+            var totalBytes=0;
+	    var start=length-5;
+            var epochs=0;
+            var bytesCompleted=0;
+	    if (start<0){
+               start=0;
+            }
+            for( var i  = 0; i < length; i++ ){
+              var bytes=this.valsObj.counters.h_bytesin[i][1];
+              if (i>start && i<(length-1)){
+                totalBytes+=bytes;
+  	        epochs++;
+              }
+	      bytesCompleted+=bytes;
+	    }
+	    var text="-";
+	    if (totalBytes>0){
+              var secs=((this.valsObj.counters.size-bytesCompleted)/(totalBytes)*epochs*this.valsObj.counters.quantum);
+	      text=sprintf( '%d:%02d:%02d',secs/3600,(secs%3600)/60,secs%60);
+	    }
+	    $("#TimeCompletion").text(text);
 	}
 
 	this.jobtable = function()
@@ -244,21 +321,33 @@
             var rows = [];
             var maxrows=1000;
             var i=0;
+            var jobcount=0;
+
 	    for( var h in this.valsObj.jobs ){
 	       var job=this.valsObj.jobs[h];
                if (i < maxrows){
-                 rows.push ([ job.id, job.finish-job.start, job.bytesin, job.bytesout, job.ident ]); 
+                 var time=job.finish-job.start;
+                 if (job.finish==0){
+                   time="";
+                   jobcount++;
+                 }
+                 var started=this.makeTime(job.start);
+                 rows.push ([ job.id, time, job.bytesin, job.bytesout, started, job.ident ]); 
                  i++;
                }
             }
+	    $("#JobCount").text( jobcount );
 	    $('#jobTable').dataTable( {
 		"bDestroy" : true,
 		"aaData": rows,
+		"sScrollY": "200px",
+		"bPaginate": false,
 		"aoColumns": [
 			{ "sTitle": "Job" },
 			{ "sTitle": "Time", "sClass": "right" },
 			{ "sTitle": "Bytes In" , "sClass": "right" },
 			{ "sTitle": "Bytes Out", "sClass": "right" },
+			{ "sTitle": "Start", "sClass": "right" },
 			{ "sTitle": "Ident" }
 		] } );	
 
@@ -311,9 +400,12 @@
 	  	      $("#TotalCount").text( values_object.counters.count );
 		      $("#TotalBytesIn").text( values_object.counters.bytesin );
 		      $("#TotalBytesOut").text( values_object.counters.bytesout );
+		      $("#FileSize").text( values_object.counters.size );
 		      //document.getElementById("debugId").innerHTML = $.tfs.valsObj[0].data;
+		      $.tfs.updatecompletion();
 		      $.tfs.graph();
 		      $.tfs.jobtable();
+	              $( "#progressbar" ).progressBar(100*values_object.counters.bytesin/values_object.counters.size);
 		  });
 	    return false;
 	}
