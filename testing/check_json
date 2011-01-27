@@ -1,0 +1,8 @@
+#!/usr/bin/perl
+
+use JSON;
+use Data::Dumper;
+
+$json=`cat status.new`;
+$data=from_json($json);
+print Dumper($data);

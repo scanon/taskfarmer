@@ -1,0 +1,16 @@
+[cluster1]
+remote=user@hostname:/path/to/tf
+batch=(sge|torque)
+submit=(serial|parallel)
+queue=queue1
+enabled=(0|1|yes|no)
+# min,max
+# walltimes?
+
+[carver]
+remote=canon@carver.nersc.gov:/usr/common/tig/taskfarmer/
+batch=torque
+submit=serial
+queue=regular
+enabled=yes
+
