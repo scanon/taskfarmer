@@ -3,6 +3,6 @@
 use JSON;
 use Data::Dumper;
 
-$json=`cat status.new`;
+$json=`cat status`;
 $data=from_json($json);
 print Dumper($data);

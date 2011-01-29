@@ -53,10 +53,12 @@ my $chunksize=2*$BATCHSIZE;
 my $jobindex=0;
 my @joblist;
 my @ARGS;
+my $commandline=0;
 
 if (defined $input){
   push @joblist,join "|",($input,@ARGV);
   start_job($jobindex);
+  $commandline=1;
 }
 
 # Parameters
@@ -121,6 +123,7 @@ while ( 1 ){
   if ( (defined $input && eof($inputf)) || $shutdown){
     $remaining_jobs=remaining_jobs(\%job);             # How much pending stuff is there?
     print LOG "Draining: $remaining_jobs remaining connections.  $remaining_inputs remaining inputs\n";
+    last if ($remaining_jobs eq 0 && $commandline eq 1);
   }
 }
 update_counters($counters,\%job,\%input,\@ondeck);
@@ -142,7 +145,7 @@ close LOG;
 #
 sub catch_int {
   my $signame = shift;
-  print stderr "Caught signal $signame ($shutdown)\n";
+#  print stderr "Caught signal $signame ($shutdown)\n";
   sleep 10 if $shutdown eq 2;
   if ($shutdown){
     flush_output();
@@ -215,7 +218,6 @@ sub do_request{
     }
     elsif (/^ARGS$/){
       foreach my $a (@ARGS){
-print stderr "debug: $a\n";
         print $sock "$a\n";
       }
       print $sock "DONE\n";
@@ -444,7 +446,7 @@ sub requeue_job{
 sub start_job{
   $jobindex=shift;
 
-  my ($input,@ARGS)=split /\|/,$joblist[$jobindex];
+  ($input,@ARGS)=split /\|/,$joblist[$jobindex];
 
   print "$input $input $_\n";
 

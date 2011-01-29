@@ -15,20 +15,18 @@ if [ $# -eq 0 ] ; then
   echo "Starting server.  This will get killed as part of test."
   export LOOP=1
   $TF_HOME/bin/tfrun -i $TFILE `pwd`/$0 arg1 arg2 'a b' > test.out 2> test.err
-  [ -s progress.$TFILE ] || echo "Progress file is empty on kill."
+  [ -s tf.progress ] || echo "Progress file is empty on kill. Not much of a test."
   LOOP=2
   echo "Restarting server"
   $TF_HOME/bin/tfrun -i $TFILE `pwd`/$0 arg1 arg2 'a b' >> test.out 2>> test.err
 
 # Everything has ran.  Now let us see how it did
   echo "Checking Results"
-  PLINES=$( cat progress.$TFILE |sed 's/,/\n/g'|wc -l)
+  PLINES=$( cat tf.progress |sed 's/,/\n/g'|wc -l)
   ELINES=$( grep -c '^>' $TFILE)
   [ $PLINES -eq $ELINES ] || echo "Didn't process all lines $PLINES vs $ELINES"
 
 # Cleanup
-#  rm progress.$TFILE error.$TFILE fastrecovery.$TFILE $ARG_OUT
-#  rm -rf $TF_HOME
 else
 
   OUT=$(wc)
