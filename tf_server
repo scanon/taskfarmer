@@ -9,14 +9,11 @@ use Getopt::Long;
 use Data::Dumper;
 
 my $input;
+my $inputf;
 
 Getopt::Long::Configure("pass_through");
 my $result = GetOptions ( "i=s" => \$input);
 
-my $inputfile=$input;
-$inputfile=~s/.*\///;
-
-# Parameters
 #
 my $BATCHSIZE=32;
 my $TIMEOUT=1800;
@@ -25,7 +22,7 @@ my $MAXRETRY=8;
 my $MAXBUFF=100*1024*1024;  # 100M buffer
 my $FLUSHTIME=20;      # write 
 my $WINDOWTIME=60*10;  # 10 minutes
-my $FR_FILE="fastrecovery.$inputfile";
+my $FR_FILE="tf.fastrecovery";
 
 # Override defaults
 $BATCHSIZE=$ENV{BATCHSIZE} if defined $ENV{BATCHSIZE};
@@ -53,8 +50,16 @@ my $next_check=time+$TIMEOUT;
 my $processed=0;
 my $buffer_size=0;
 my $chunksize=2*$BATCHSIZE;
+my $jobindex=0;
+my @joblist;
+my @ARGS;
 
-my $inputf=new IO::File $input or die "Unable to open input file ($input)\n";
+if (defined $input){
+  push @joblist,join "|",($input,@ARGV);
+  start_job($jobindex);
+}
+
+# Parameters
 
 fast_recovery($FR_FILE);
 
@@ -84,20 +89,18 @@ my $command;
 my $counters;
 
 initialize_counters($counters,$WINDOWTIME);
-my @stati=stat $inputf;
-$counters->{size}=$stati[7];
-$counters->{quantum}=$WINDOWTIME;
-$counters->{start_time}=time;
+if (defined $inputf){
+}
 
-open(PROGRESS,">> ./progress.$inputfile");
-open(ERROR,">> ./error.$inputfile");
-open(LOG,">> ./log.$inputfile");
+open(PROGRESS,">> ./tf.progress");
+open(ERROR,">> ./tf.err");
+open(LOG,">> ./tf.log");
 select LOG; $|=1;
 select STDOUT;
 $SIG{INT} = \&catch_int;  # best strategy
 
 # This is the main work loop.
-while ($remaining_jobs || $remaining_inputs){
+while ( 1 ){
   my $new_sock=$sock->accept();
   if (defined $new_sock){
     my $clientaddr=$new_sock->peerhost();
@@ -107,7 +110,7 @@ while ($remaining_jobs || $remaining_inputs){
   }
   check_timeouts() if (time>$next_check);
   flush_output() if (time>$next_flush || $buffer_size > $MAXBUFF);
-  if (time>$next_status){
+  if (defined $inputf && time>$next_status){
     update_counters($counters,\%job,\%input,\@ondeck);
     write_stats($counters,\%job,\%input,\@ondeck,$statusfile) if defined $statusfile;
     delete_olddata(\%job,\%input);
@@ -115,8 +118,7 @@ while ($remaining_jobs || $remaining_inputs){
   }
   
   $remaining_inputs=(scalar @ondeck);
-  if ( eof($inputf) || $shutdown){
-    $shutdown=1;                      # In case eof got us here.
+  if ( (defined $input && eof($inputf)) || $shutdown){
     $remaining_jobs=remaining_jobs(\%job);             # How much pending stuff is there?
     print LOG "Draining: $remaining_jobs remaining connections.  $remaining_inputs remaining inputs\n";
   }
@@ -168,7 +170,7 @@ sub do_request{
   my $sock=shift;
   my $clientaddr=$sock->peerhost();
 
-#  print "Connect from $clientaddr\n";
+  print "Connect from $clientaddr\n";
 
   my $got_response=0;
   my $status=0;
@@ -196,6 +198,14 @@ sub do_request{
     elsif (/^IDENT /){
       ($command,$ident)=split;
     }
+    elsif (/^ADDFILE/){
+      s/ADDFILE //;
+      chomp;
+      push @joblist,$_;
+      
+      print "Added job $_\n";
+      start_job($jobindex) if ! defined $inputf;
+    }
     elsif (/^NEXT$/){
       if ($shutdown && ! $remaining_inputs){
         print $sock "SHUTDOWN\n";
@@ -204,7 +214,8 @@ sub do_request{
       last;
     }
     elsif (/^ARGS$/){
-      foreach my $a (@ARGV){
+      foreach my $a (@ARGS){
+print stderr "debug: $a\n";
         print $sock "$a\n";
       }
       print $sock "DONE\n";
@@ -366,12 +377,12 @@ sub build_list{
   my @tlist;
   my $ct=0;
 
-
+  return 0 if (! defined $inputf);
 # Build rest from ondeck
 #
   if (scalar @ondeck < ($batchsize-$ct)){
     @tlist=read_input($inputf,$chunksize);
-    $index+=scalar @tlist;
+#    $index+=scalar @tlist;
     push @ondeck, @tlist;
   }
   while ($ct<$batchsize && scalar @ondeck >0){
@@ -430,6 +441,21 @@ sub requeue_job{
   delete $job{$jstep};
 }
 
+sub start_job{
+  $jobindex=shift;
+
+  my ($input,@ARGS)=split /\|/,$joblist[$jobindex];
+
+  print "$input $input $_\n";
+
+  $inputf=new IO::File $input or die "Unable to open input file ($input)\n";
+  my @stati=stat $inputf;
+  $counters->{size}=$stati[7];
+  $counters->{quantum}=$WINDOWTIME;
+  $counters->{start_time}=time;
+
+}
+
 #
 # Read in $read number of inputs from $in.
 # If $read is 0 then read until the eof.
@@ -458,6 +484,7 @@ sub read_input{
       $input{$id}->{offset}=$id;
       $input{$id}->{index}=$index;
       $input{$id}->{status}='ondeck';
+      $input{$id}->{file}=$jobindex;
       push @list,$id;
     }
     else{
@@ -478,19 +505,48 @@ sub read_input{
 #
 sub fast_recovery{
   my $filename=shift; 
+  my @offsets;
   return unless ( -e $filename);
   print STDERR "Recoverying using $filename\n";
   my $fr=new IO::File($filename) or die "Unable to open $filename\n";
 # Read the max index and offset
 #
-  $_=<$fr>;
-  $_=~s/.*max: //;  
-  ($index,$offset)=split;
-  my @offsets=<$fr>;
-  foreach (@offsets){
-    seek $inputf,$_,0 or die "Unable to seek to input file location $_\n";
-    die "Invalid offset: $_ is larger than $offset\n" if ($_>$offset);
+  while(<$fr>){   
+    chomp;
+    if (/^job:/){
+      s/job://;
+      my ($jn,$job)=split /:/,$_,2;
+      $joblist[$jn]=$job;
+    }
+    elsif (/^jobindex:/){
+      s/jobindex://;
+      $jobindex=$_;
+    }
+    elsif (/^max:/){
+      s/max://;  
+      ($index,$offset)=split /:/;
+    }
+    elsif (/^i:/){
+      s/i://;
+      push @offsets,$_;
+    }
+  }
+  $index-=scalar @offsets;
+  my $prev=-1;
+  foreach (sort @offsets){
+    my ($jn,$off)=split /:/;
+    if ($prev ne $jn){
+      close($inputf) if ($prev ne -1);
+      start_job($jn);
+      $prev=$jn;
+    } 
+    seek $inputf,$off,0 or die "Unable to seek to input file location $_\n";
+  
+    die "Invalid offset: $_ is larger than $offset\n" if ($jn eq $jobindex && $off>$offset );
     push @ondeck,read_input($inputf,1);
+  }
+ if ($prev ne $jobindex){
+      start_job($jobindex);
   }
   seek $inputf,$offset,0 or die "Unable to seek to input file location\n";
   printf LOG "Recovered %d inputs from $filename\n", scalar @ondeck;
@@ -516,11 +572,18 @@ sub write_fastrecovery{
   my $offset;
   my @recoverylist;
 
+  return unless defined $inputf;
   open(FR,"> $filename.new");
+  my $ji=0; 
+  foreach (@joblist){
+    print FR "job:$ji:$_\n";
+    $ji++;
+  }
+  print FR "jobindex:$jobindex\n";
 #  $offset=tell($inputf)-length($input{$next_header}->{input});
   $offset=tell($inputf);
   $offset=tell($inputf) if (eof($inputf));
-  printf FR "# max: %ld %ld\n",$index,$offset;
+  printf FR "max:%ld:%ld\n",$index,$offset;
   my $inputid;
   my $ct=0;
 
@@ -540,7 +603,7 @@ sub write_fastrecovery{
   check_inputs(@recoverylist);
   foreach my $inputid (@recoverylist){
 #    print FR $input{$inputid}->{input};
-    printf FR "%d\n",$input{$inputid}->{offset};
+    printf FR "i:%d:%d\n",$input{$inputid}->{file},$input{$inputid}->{offset};
     $ct++;
   }
   close FR; 

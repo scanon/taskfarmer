@@ -1,10 +1,19 @@
 #!/usr/bin/perl
 
+use strict;
+
 # Temporary directory for run info
 #
-my $TF_DIR="$HOME/.task-farmer.$(hostname).$PBS_JOBID";
-my $SOCKFILE="$TF_DIR/sockfile";
-my $PIDFILE="$TF_DIR/tfserver.pid";
+my $TF_DIR="$ENV{HOME}/.task-farmer.$(hostname).$ENV{PBS_JOBID}";
+my $SOCKFILE="$ENV{TF_DIR}/sockfile";
+my $PIDFILE="$ENV{TF_DIR}/tfserver.pid";
+
+my $TF_ADDR=$ENV{TF_ADDR};
+my $TF_PORT=$ENV{TF_PORT};
+my $TF_HOME=$ENV{TF_HOME};
+
+my $INT=$ENV{INT};
+my $PID;
 
 $SIG{INT} = \&cleanup;  # best strategy
 
@@ -20,7 +29,7 @@ else{
 #    echo "Server may already be running." 1>&2 && exit
   } 
   else {
-    unlink $SOCKFILE if ( -e $SOCKFILED );
+    unlink $SOCKFILE if ( -e $SOCKFILE );
     unlink $PIDFILE;
   }
 }
@@ -33,18 +42,18 @@ if ( -z $TF_ADDR  &&  -z $TF_PORT ){
 
 # Start the server and record the PID
 #
-  $exe=$0;
+  my $exe=$0;
   $exe=~s/.*\///;
   if ( $exe == "tfrun" ){
     `$TF_HOME/libexec/taskfarmer/tf_server "$@" &`;
   }
   else{
     $exe=~s/tf$//;
-    $APP=`which $exe`;
+    my $APP=`which $exe`;
 # 2>/dev/null) || (print "Unable to find $base")
     exit if ( ! -e $APP );
     print "Will run $APP";
-    $line="$TF_HOME/libexec/taskfarmer/tf_server $APP";
+    my $line="$TF_HOME/libexec/taskfarmer/tf_server $APP";
     $line.=join @ARGV," ";
     $line.=" &";
     `$line`;
@@ -74,13 +83,14 @@ else{
   }
 }
 
-if ( -z $SERVER_ONLY ){
+my $STATUS;
+if ( -z $ENV{SERVER_ONLY} ){
 # Launch the clients
 #
   run_one();
 # Get exit status for aprun
 #
-  $STATUS=$?;
+  my $STATUS=$?;
   if ( $ENV{USE_RELAY} eq 2 ){
     print "Stoping relay";
     stop_relay();
@@ -92,7 +102,7 @@ else{
   print STDERR "TF_ADDR=$TF_ADDR TF_PORT=$TF_PORT tfrun";
 
   waitpid $PID,0;
-  $ENV{STATUS}=$?;
+  my $STATUS=$?;
 }
 
 # Kill the server (just in case)
@@ -110,7 +120,7 @@ sub kill_server {
 sub cleanup {
   print STDERR "Shutting down";
   if ( -e "$PIDFILE" ){
-    $pid=`cat $PIDFILE`;
+    my $pid=`cat $PIDFILE`;
     kill $pid;
     unlink $PIDFILE
   }
@@ -134,8 +144,7 @@ sub read_config{
     $ENV{TF_HOME}=$TF_HOME;
   }
   if ( -z $ENV{TF_CONFDIR} ){
-    $TF_CONFDIR="$TF_HOME/share/taskfarmer";
-    $ENV{TF_CONFDIR};
+    $ENV{TF_CONFDIR}="$TF_HOME/share/taskfarmer";
   }
   if ( -e "$ENV{TF_CONFDIR}/$ENV{NERSC_HOST}.conf" ){
 #    . "$ENV{TF_CONFDIR}/$ENV{NERSC_HOST}.conf";
@@ -151,4 +160,7 @@ sub start_relay{
 }
 
 sub stop_relay{
+}
+
+sub background{
 }

@@ -16,9 +16,9 @@ if [ $# -eq 0 ] ; then
   echo "Checking Results"
   [ $(cat $ARG_OUT|wc -l) -eq 3 ] || echo "Error: incorrect number of args"
   [ $(grep -c 'a b' $ARG_OUT) -eq 1 ] || echo "Error: didn't read arg with space"
-  cleanup
+#  cleanup
 else
-
+  touch b
   OUT=$(wc)
 
 # Get ARGS
