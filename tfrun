@@ -28,7 +28,7 @@ else
     echo "Server may already be running." 1>&2 && exit
   else 
     [ -e $SOCKFILE ] && rm $SOCKFILE
-    rm $PIDFILE
+    [ -e $PIDFILE ] && rm $PIDFILE
   fi
 fi
 

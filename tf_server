@@ -9,6 +9,7 @@ use Getopt::Long;
 use Data::Dumper;
 
 my $input;
+my $currentfile;
 my $inputf;
 
 Getopt::Long::Configure("pass_through");
@@ -55,12 +56,6 @@ my @joblist;
 my @ARGS;
 my $commandline=0;
 
-if (defined $input){
-  push @joblist,join "|",($input,@ARGV);
-  start_job($jobindex);
-  $commandline=1;
-}
-
 # Parameters
 
 fast_recovery($FR_FILE);
@@ -91,8 +86,6 @@ my $command;
 my $counters;
 
 initialize_counters($counters,$WINDOWTIME);
-if (defined $inputf){
-}
 
 open(PROGRESS,">> ./tf.progress");
 open(ERROR,">> ./tf.err");
@@ -100,6 +93,13 @@ open(LOG,">> ./tf.log");
 select LOG; $|=1;
 select STDOUT;
 $SIG{INT} = \&catch_int;  # best strategy
+
+if (defined $input){
+  push @joblist,join "|",($input,@ARGV);
+  start_job($jobindex);
+  $commandline=1;
+}
+
 
 # This is the main work loop.
 while ( 1 ){
@@ -120,7 +120,7 @@ while ( 1 ){
   }
   
   $remaining_inputs=(scalar @ondeck);
-  if ( (defined $input && eof($inputf)) || $shutdown){
+  if ( (defined $inputf && eof($inputf)) || $shutdown){
     $remaining_jobs=remaining_jobs(\%job);             # How much pending stuff is there?
     print LOG "Draining: $remaining_jobs remaining connections.  $remaining_inputs remaining inputs\n";
     last if ($remaining_jobs eq 0 && $commandline eq 1);
@@ -173,7 +173,7 @@ sub do_request{
   my $sock=shift;
   my $clientaddr=$sock->peerhost();
 
-  print "Connect from $clientaddr\n";
+#  print "Connect from $clientaddr\n";
 
   my $got_response=0;
   my $status=0;
@@ -206,8 +206,8 @@ sub do_request{
       chomp;
       push @joblist,$_;
       
-      print "Added job $_\n";
-      start_job($jobindex) if ! defined $inputf;
+      printf LOG "Added job: $_\n", 
+      start_job($jobindex) if ! defined $currentfile;
     }
     elsif (/^NEXT$/){
       if ($shutdown && ! $remaining_inputs){
@@ -285,8 +285,8 @@ sub process_results{
     $job{$jstep}->{time}=$rtime;
     $job{$jstep}->{finish}=time;
     $job{$jstep}->{ident}=$ident;
-    $progress_buffer.=sprintf "%s %s %d %d %d %d\n", 
-	$inputs,$ident,$rtime,
+    $progress_buffer.=sprintf "%s %s %s %d %d %d %d\n", 
+	$currentfile, $inputs,$ident,$rtime,
 	$job{$jstep}->{lines},time,$job{$jstep}->{bytesin};
     printf LOG "Recv: %d input:%25s hostid:%-10s  time:%-4ds lines: %-6d proc: %d\n", 
 	$jstep, substr($inputs,0,25),$ident,
@@ -446,11 +446,11 @@ sub requeue_job{
 sub start_job{
   $jobindex=shift;
 
-  ($input,@ARGS)=split /\|/,$joblist[$jobindex];
+  ($currentfile,@ARGS)=split /\|/,$joblist[$jobindex];
 
-  print "$input $input $_\n";
+  printf LOG "Opening: %s (%s)\n",$currentfile,join " ",@ARGS;
 
-  $inputf=new IO::File $input or die "Unable to open input file ($input)\n";
+  $inputf=new IO::File $currentfile or die "Unable to open input file ($currentfile)\n";
   my @stati=stat $inputf;
   $counters->{size}=$stati[7];
   $counters->{quantum}=$WINDOWTIME;
