@@ -1,0 +1,14 @@
+#!/bin/sh
+
+CACHERH=/global/common/carver/tig/cacher/1.1/
+CACHER=$CACHERH/bin/cacher
+
+if [ -z "$CLEANUP" ] ; then
+  if [ ! -z $DB ] ; then
+    $CACHER -c
+    DEBUG_CACHER=1 $CACHER $DB.*
+    export LD_PRELOAD=$CACHERH/lib/libtrap.so
+  fi
+else
+  DEBUG_CACHER=1 $CACHER -c
+fi
