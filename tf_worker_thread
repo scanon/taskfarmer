@@ -22,6 +22,10 @@ my $SERVER=$ARGV[0];
 my $PORT=$ARGV[1];
 my $THREAD=$ARGV[2];
 
+#
+# This is to spread things out a bit.
+sleep $THREAD;
+
 # Default TIMEOUT, RETRIES, SLEEP
 my $TIMEOUT=45;
 my $MAX_RETRIES=3;

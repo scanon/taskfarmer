@@ -69,7 +69,7 @@ if [ -z $TF_ADDR ] && [ -z $TF_PORT ] ; then
 else
   echo "Server defined.  Will contact $TF_ADDR:$TF_PORT"
   export EXTERNAL_SERVER=1
-  [ ! -z USE_RELAY ] && USE_RELAY=2 && echo "Starting relay" && start_relay
+  [ ! -z $USE_RELAY ] && USE_RELAY=2 && echo "Starting relay" && start_relay
 fi
 
 if [ -z $SERVER_ONLY ] ; then
