@@ -2,18 +2,14 @@
 
 # Temporary directory for run info
 #
-export TF_DIR=$HOME/.task-farmer.$(hostname).$PBS_JOBID
-export SOCKFILE=$TF_DIR/sockfile
-export PIDFILE=$TF_DIR/tfserver.pid
+export SOCKFILE=./.sockfile.$$
 
 cleanup () {
   echo "Shutting down" 1>&2
-  if [ -e $PIDFILE ] ; then
-    kill $(cat $PIDFILE) > /dev/null 2>&1
-    rm $PIDFILE
+  if [ -e $PID ] ; then
+    kill $PID > /dev/null 2>&1
   fi
   [ -e $SOCKFILE ] && rm $SOCKFILE
-  [ -d $TF_DIR ] && rmdir $TF_DIR
   [ ! -z $USE_RELAY ] && [ $USE_RELAY -eq 2 ] && echo "Stoping relay" && stop_relay
   exit $STATUS
 }
@@ -21,20 +17,12 @@ trap cleanup 2 15
 
 # Create the TF directory
 #
-if [ ! -e $TF_DIR ] ; then
-  mkdir $TF_DIR
-else
-  if [ -e $PIDFILE ] && [ -e /proc/$(cat $PIDFILE) ] ; then
-    echo "Server may already be running." 1>&2 && exit
-  else 
-    [ -e $SOCKFILE ] && rm $SOCKFILE
-    rm $PIDFILE
-  fi
-fi
+[ -e $SOCKFILE ] && rm $SOCKFILE
 
 # Source the configuration file
 [ -z $TF_HOME ] && export TF_HOME=$(dirname $0|sed 's/bin$//')
 [ -z $TF_CONFDIR ] && TF_CONFDIR=$TF_HOME/share/taskfarmer
+
 if [ -e $TF_CONFDIR/$NERSC_HOST.conf ] ; then
   . $TF_CONFDIR/$NERSC_HOST.conf
 else
@@ -58,7 +46,7 @@ if [ -z $TF_ADDR ] && [ -z $TF_PORT ] ; then
     echo "Will run $APP"
     $TF_HOME/libexec/taskfarmer/tf_server $APP "$@" &
   fi
-  echo $! > $PIDFILE
+  PID=$!
 #
 # Wait for the socket file to exist.
 #
@@ -66,13 +54,16 @@ if [ -z $TF_ADDR ] && [ -z $TF_PORT ] ; then
     sleep 1
   done
   TF_PORT=$(cat $SOCKFILE)
+  if [ ! -z $TF_SERVERS ] ; then
+    echo "$TF_ADDR:$TF_PORT:$PID" >> $TF_SERVERS
+  fi
 else
   echo "Server defined.  Will contact $TF_ADDR:$TF_PORT"
   export EXTERNAL_SERVER=1
-  [ ! -z USE_RELAY ] && USE_RELAY=2 && echo "Starting relay" && start_relay
+  [ ! -z $USE_RELAY ] && USE_RELAY=2 && echo "Starting relay" && start_relay
 fi
 
-if [ -z $SERVER_ONLY ] ; then
+if [ -z $SERVER_ONLY ] || [ ! -z $EXTERNAL_SERVER ] ; then
 # Launch the clients
 #
   run_one
@@ -85,14 +76,11 @@ else
   echo "Starting in server only mode." 1>&2
   echo "Cut and paste..." 1>&2
   echo "TF_ADDR=$TF_ADDR TF_PORT=$TF_PORT tfrun" 1>&2
-  wait $(cat $PIDFILE)
+  wait $PID
   STATUS=$?
 fi
 
 # Kill the server (just in case)
-if [ -z EXTERNAL_SERVER ] ; then
-  [ -e $PIDFILE ] && kill $(cat $PIDFILE) > /dev/null 2>&1
-  [ -e $PIDFILE ] && rm $PIDFILE
-  [ -e $SOCKFILE ] && rm $SOCKFILE
-fi
+[ ! -z $PID ] &&  kill $PID > /dev/null 2>&1
+[ -e $SOCKFILE ] && rm $SOCKFILE
 exit $STATUS
