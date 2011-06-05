@@ -1,4 +1,4 @@
-#!/usr/bin/perl
+#!/usr/bin/env perl
 
 use Socket;
 use IO::Handle;
@@ -62,7 +62,7 @@ fast_recovery($FR_FILE);
 my %sockargs=( 
 	Proto=>'tcp',  
 	Timeout => $TIMEOUT_SOCKET,
-	Listen => 200,
+	Listen => 1000,
 	Reuse => 1);
 
 $sockargs{LocalPort}=$ENV{PORT} if defined $ENV{PORT};
@@ -621,9 +621,9 @@ sub write_stats{
   $data->{jobs}=$j; 
   $data->{input}=$i; 
   $data->{ondeck}=$od; 
-  open(DUMP,"> data.dump");
-  print DUMP Dumper($data) if $output;
-  close DUMP;
+#  open(DUMP,"> data.dump");
+#  print DUMP Dumper($data) if $output;
+#  close DUMP;
 #  print stderr "dumping status\n";
   return unless $output;
   print CF "{\"jobs\":[\n" if $output;
