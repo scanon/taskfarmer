@@ -42,8 +42,8 @@ cleanup() {
   cd /tmp
   rm -rf $TF_TMPDIR
   CLEANUP=1
-  if [ ! -z $STAGE_ONCE ] && [ -x "$STAGE_ONCE" ] ; then
-  . $STAGE_ONCE
+  if [ ! -z $STAGE ] && [ -x "$STAGE" ] ; then
+  . $STAGE
   fi
   exit
 }

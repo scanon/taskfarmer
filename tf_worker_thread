@@ -22,10 +22,14 @@ my $SERVER=$ARGV[0];
 my $PORT=$ARGV[1];
 my $THREAD=$ARGV[2];
 
+#
+# This is to spread things out a bit.
+sleep $THREAD;
+
 # Default TIMEOUT, RETRIES, SLEEP
 my $TIMEOUT=45;
-my $MAX_RETRIES=3;
-my $SLEEP=5;
+my $MAX_RETRIES=10;
+my $SLEEP=20;
 
 # This is our work area
 #
@@ -135,7 +139,7 @@ sub connect_server {
 	Timeout => 45,
 	Proto    => 'tcp');
     return $sock if defined $sock;
-    sleep $SLEEP;
+    sleep rand($retry*$SLEEP);
     $retry++;
     print STDERR "$ID: Retrying connection to $server on $port ($retry)\n" if ($retry<$MAX_RETRIES);
   }
