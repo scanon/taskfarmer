@@ -9,20 +9,21 @@ if [ $# -eq 0 ] ; then
   cleanup
   export SERVER_TIMEOUT=1
   export SOCKET_TIMEOUT=1
+  export PIDFILE=`pwd`/tf.pid
 
   export ARG_OUT=`pwd`/test.args
 
   echo "Starting server.  This will get killed as part of test."
   export LOOP=1
-  $TF_HOME/bin/tfrun -i $TFILE `pwd`/$0 arg1 arg2 'a b' > test.out 2> test.err
-  [ -s tf.progress ] || echo "Progress file is empty on kill. Not much of a test."
+  $TF_HOME/bin/tfrun --tfpidfile $PIDFILE -i $TFILE `pwd`/$0 arg1 arg2 'a b' > test.out 2> test.err
+  [ -s progress.$TFILE ] || echo "Progress file is empty on kill. Not much of a test."
   LOOP=2
   echo "Restarting server"
-  $TF_HOME/bin/tfrun -i $TFILE `pwd`/$0 arg1 arg2 'a b' >> test.out 2>> test.err
+  $TF_HOME/bin/tfrun --tfpidfile $PIDFILE -i $TFILE `pwd`/$0 arg1 arg2 'a b' >> test.out 2>> test.err
 
 # Everything has ran.  Now let us see how it did
   echo "Checking Results"
-  PLINES=$( cat tf.progress |sed 's/,/\n/g'|wc -l)
+  PLINES=$( cat progress.$TFILE |sed 's/,/\n/g'|wc -l)
   ELINES=$( grep -c '^>' $TFILE)
   [ $PLINES -eq $ELINES ] || echo "Didn't process all lines $PLINES vs $ELINES"
 
@@ -40,6 +41,8 @@ else
     exit 1
 # Test recovery
   elif [ $STEP -gt 15 ] && [ $LOOP -eq 1 ] ; then 
+    echo "$PIDFILE"
+    cat $PIDFILE
     kill -INT $(cat $PIDFILE)
     sleep 1
     exit 1;

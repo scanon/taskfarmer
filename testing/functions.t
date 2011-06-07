@@ -7,7 +7,7 @@ setup(){
 }
 
 cleanup(){
-  for f in data.dump  error.test.faa  fastrecovery.test.faa  log.test.faa  progress.test.faa  status.new  test.err  test.out tf.fastrecovery tf.progress test.args tf.err tf.log
+  for f in data.dump  error.test.faa  fastrecovery.test.faa  log.test.faa  progress.test.faa  status.new  test.err  test.out tf.fastrecovery progress.$TFILE test.args tf.err tf.log tf.pid
   do
     [ -e $f ] && rm $f
   done

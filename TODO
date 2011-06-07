@@ -1,0 +1,3 @@
+* Create a manpage
+* Remove ENV variables as much as possible
+* Add TF_SERVER concept in include in client script
