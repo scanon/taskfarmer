@@ -55,7 +55,7 @@ if [ -z $TF_ADDR ] && [ -z $TF_PORT ] ; then
   done
   TF_PORT=$(cat $SOCKFILE)
   if [ ! -z $TF_SERVERS ] ; then
-    echo "$TF_ADDR:$TF_PORT:$PID" >> $TF_SERVERS
+    echo "$TF_ADDR:$TF_PORT:$PID:$(pwd):$@" >> $TF_SERVERS
   fi
 else
   echo "Server defined.  Will contact $TF_ADDR:$TF_PORT"

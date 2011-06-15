@@ -1,3 +1,9 @@
 * Create a manpage
 * Remove ENV variables as much as possible
 * Add TF_SERVER concept in include in client script
+
+* Add heartbeat
+* Merge log and error
+* Add verbosity option for log output
+
+* Remove files after an error

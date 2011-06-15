@@ -1,0 +1,237 @@
+#!/usr/bin/perl
+#
+# tfhmmsearch - taskfarmer hmmsearch script
+#
+# Shane Canon
+# 2011
+# 
+# This script can be called in three ways.
+# * From the non-server host to start the server
+# * On the server host to start the server
+# * As the wrapper script (PBS_JOBID defined).
+#
+# In addition, this script contains routines to
+# * index a model file
+# * generate an taskfarmer input file from an index.
+# * cleanup running servers
+
+use strict;
+
+my $serverfile="servers";
+my $hostname="nid05416";  # Name reported by hostname on the node
+my $rhost="hmom01";       # Name used to ssh to the host (different on hopper)
+my $window=300;
+
+# if there is just a single -k then do a clean up.
+#
+if ($ARGV[0] eq '-k' && !defined $ARGV[1]) {
+  cleanup_servers($serverfile);
+  exit;
+}
+
+
+# hmmsearch needs at least 4 args.
+#
+die "Not enough argumements\n" if scalar @ARGV < 4;
+
+# Is this being from outside PBS.  Then start the server and exit.
+#
+if ( !defined $ENV{PBS_JOBID}){
+  start_server();
+  exit;
+}
+
+print stderr "Running script\n" if defined $ENV{DEBUGTF};
+# Temporary output file.
+my $temp="tmp$$.hmm";
+# Parser;
+my $parser="parse_hmm_out.pl";
+$parser=$ENV{PARSER} if (defined $ENV{PARSER});
+
+open(OUT,"> $temp") or die "Unable to open temporary file\n";
+# Read from stdin the file to read from and the offset.
+# Then write the model to the temporary file.
+while(<STDIN>){
+  chomp;
+  s/> //;
+  my ($file,$offset)=split;
+  open(F,$file) or die "Unable to open $file\n";
+
+  seek F,$offset,0 or die "Unable to seek to $offset\n";
+  my $line=<F>;
+  print OUT $line;
+  while (my $line=<F>){
+    last if ($line=~/^HMMER/);
+    print OUT $line;
+  }
+  close F;
+}
+close OUT;
+
+# Get the query file from the last arg.
+my $query=pop @ARGV;
+# Discard the next arg.
+pop @ARGV;
+
+# Get the output file name.  This is used by the parser.
+#
+my $output;
+for (my $i=0;$i<scalar @ARGV;$i++){
+  if ($ARGV[$i]=~/^-o/){
+    $output=$ARGV[$i+1];
+    last;
+  }
+}
+
+# run the regular hmmsearch.  The rest of the args come
+# from the server.  The model file is the temporary file
+# that contains one (or more depending on the BATCHSIZE)
+# models.
+#
+print stderr "Running hmmsearch\n" if defined $ENV{DEBUGTF};
+my $cmd="hmmsearch ".join( " ",@ARGV)." $temp $query";
+print stderr "Cmd: $cmd\n" if defined $ENV{DEBUGTF};
+print `$cmd`;
+# Check the exit;
+my $RET=$?;
+print stderr "Exited with $RET\n" if defined $ENV{DEBUGTF};
+exit $RET if ($RET);
+unlink $temp;
+
+print stderr "Running parser: $parser\n" if defined $ENV{DEBUGTF};
+print `$parser $output`;
+unlink $output;
+exit;
+
+
+sub start_server{
+# If this is being called from something other than 
+# the server, then ssh to the host.  Figure out the
+# current working directory first and change to it first.
+  my $HOSTNAME=`hostname`;
+  chomp $HOSTNAME;
+  my $bin=`which $0`;
+  chomp $bin;
+  if ( $HOSTNAME ne $hostname ) {
+    print "Connect to $rhost\n";
+    my $CWD=`pwd`;
+    chomp $CWD;
+    my $cmd="cd $CWD;";
+    $cmd.="$bin ";
+    $cmd.=join " ",@ARGV;
+    print "Running: $cmd\n\n";
+    print `ssh -q $rhost \"$cmd\"`;
+  }
+  else{
+
+#  Pull of the last two args
+#
+    my $queries=pop @ARGV;
+    my $models=pop @ARGV;
+
+#
+# Computed names (remove path and extension).  This will
+# be used to create a "name" for this run.
+#
+    my $model=$models;
+    $model=~s/.*\///;
+    $model=~s/\..*//;
+    my $query=$queries;
+    $query=~s/.*\///;
+    $query=~s/\..*//;
+    my $product="$model-$query";
+    my $input="$product.in";
+
+    if (-e "fastrecovery.$input" ) {
+      print "Checking that server isn't running\n";
+      my @s=stat "fastrecovery.$input";
+      my $delta=time-$s[9];
+      if ( $delta < $window){
+        print "fastrecovery file is only $delta seconds old.\n";
+        print "Please retry in ".($window-$delta)." seconds\n";
+        exit;
+      }
+    }
+    print "Starting Server\n";
+
+    # Generate the input if it doesn't already exist (i.e. this is a restart)
+    # The input file comes from the models file (not the queries).
+    # The input is one line for each model.  That is how things will be run.
+
+    if ( ! -e $input ) {
+      generate_input($models,$input);
+    }
+    # Configure environment for task farmer.
+    $ENV{TF_HOME}="/global/common/carver/tig/taskfarmer/1.4/";
+    $ENV{BATCHSIZE}=1;
+    $ENV{SERVER_TIMEOUT}=1700;
+    $ENV{SERVER_ONLY}=1;
+    $ENV{TF_SERVERS}=$serverfile;
+    $ENV{STATUSFILE}="/project/projectdirs/genomes/www/sf/hmm-$product.js";
+    $ENV{PATH}.=":$ENV{TF_HOME}/bin";
+
+# Launch tfrun to start the server.
+    my $ARGS=join " ",@ARGV;
+    print `tfrun -i $input $bin $ARGS $model $queries >> server.out 2>>server.err &`;
+  }
+}
+
+
+# Generate an input file that is just the filename and the offset (plus the '> ')
+#
+sub generate_input{
+
+  my $file=shift;
+  my $OUTPUT=shift;
+  my $offset_b;
+  my $offset;
+
+  my $index=$file.".idx";
+
+  gindex($file,$index) unless (-e "$index");
+
+  my @l=stat $index or die "Unable to open $index\n";
+  my $count=($l[7])/8;
+  open(I,$index);
+  open(O,"> $OUTPUT");
+
+  for (my $i=0;$i<$count;$i++){
+    read( I,$offset_b,8);
+    $offset=unpack("Q",$offset_b);
+    print O "> $file $offset\n";
+  }
+  close I;
+  close O;
+}
+
+# This creates and index of a model file.
+#
+sub gindex{
+  my $file=shift;
+  my $index=shift;
+
+  my @s=stat $file;
+  open(I,$file) or die "Unable to open $file\n";
+  open(O,"> $index");
+  print stderr "Generating index for $file\n";
+  while(<I>){
+    if (/^HMMER3/){
+      print O pack "Q",tell(I)-length($_);
+      printf stderr "%4d %%\r",100*tell(I)/$s[7];
+    }
+  }
+  close I;
+  close O;
+}
+
+
+sub cleanup_servers{
+  my $serverfile=shift;
+
+  open(S,"$serverfile") or die "No servers.  Exiting.";
+  while(<S>){
+   my ($host,$port,$pid,$rest)=split /:/;
+   print `ssh -q $rhost kill $pid`;
+  }
+  unlink $serverfile;
+}
