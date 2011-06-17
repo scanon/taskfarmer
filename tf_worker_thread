@@ -165,15 +165,10 @@ sub send_and_get {
     if ($error){
       print STDERR "$ID: ERROR: step $step exited with $status\n";
       print STDERR `cat stderr`;
-      if (defined $ENV{DEBUGDIR}){
-        my $ddir="$ENV{DEBUGDIR}/step.$step";
-        mkdir $ddir;
-        print STDERR `ls -l > $ddir/listing.workingdir`;
-        print STDERR `ls -l ../ $ddir/listing.parent`;
-        print STDERR `echo "$input" > $ddir/input`;
-        print STDERR `mv * $ddir/`;
-        die "ERROR";
-      }
+      save_errors("$ENV{DEBUGDIR}/step.$step") if (defined $ENV{DEBUGDIR});
+      opendir(DIR, ".") or die "cann't opendir: $!";
+      map {unlink "$TMPDIR/$_" if ($_ ne '.' && $_ ne '..');} readdir(DIR);
+      closedir DIR;
       print $sock "ERROR $step\n";
     }
     else{
@@ -202,6 +197,21 @@ sub send_and_get {
   }
   close $sock;
   return $step;
+}
+
+sub save_errors{
+  my $ddir=shift;
+  
+  mkdir $ddir;
+  print STDERR "Saving listings\n";
+  print STDERR `ls -l > $ddir/listing.workingdir`;
+  print STDERR `ls -l ../ $ddir/listing.parent`;
+  print STDERR "Saving input\n";
+  print STDERR `echo "$input" > $ddir/input`;
+  print STDERR "Moving files\n";
+  print STDERR `mv * $ddir/`;
+  print STDERR "Killing thread.  No more for this guy.\n";
+  die "ERROR";
 }
 
 # Run the application
