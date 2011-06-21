@@ -1,14 +1,43 @@
 #!/bin/sh
-#
+
+#PBS -N blastp
 #PBS -q regular
-#PBS -l mppwidth=256,mppnppn=4,walltime=15:00
+#PBS -l mppwidth=240,mppnppn=24,walltime=1:00:00
+#PBS -A m342
 #PBS -V
 
 cd $PBS_O_WORKDIR 
 
-# Specify the entire path to the database
 #
-DB=$SCRATCH/db/refGenomes.faa
+# Setup task farmer
+export STAGE=$TF_HOME/share/taskfarmer/stage.cacher
+export PATH=$PATH:$TF_HOME/bin:/usr/common/jgi/blast-2.2.23/bin
 
-blasttf -i new.faa -p blastp -d $DB -F 'm S'  -e 1e-2 -b 2000 -z 700000000  -m 8 -o output.m8.txt
+# Specify the entire path to the database.  This is used by the stage script to cache
+# the DB on the compute nodes.  So don't just change the tfrun line.
+#
+# When you copy files to Lustre scratch, be sure to increase the stripe count to improve
+# performance.  Here is how...
+# mkdir $SCRATCH/db
 
+# lfs setstripe $SCRATCH/db -c -1
+# cp </path/to/db/nr*> $SCRATCH/db/
+#
+# Copy DB from global scratch into $SCRATCH for better performance
+export DB=$SCRATCH/db/refGenomes.faa
+INPUT=input.faa
+OUTPUT=blast.out
+
+# Tweaks.  You can tune the batch size so that each step takes a reasonable amount of time.
+# The batch size is the number of sequences processed in each step.
+export BATCHSIZE=16
+# Max expected time to process the previous number of sequences.  Adjust appropriately.
+export SERVER_TIMEOUT=2700
+
+# This can be used to monitor progress.  View...
+# https://portal-auth.nersc.gov/project/genomes/stats/tfs.html?source=/project/genomes/sf/status-contigs.js
+export STATUSFILE=/project/projectdirs/genomes/www/sf/blast-$INPUT.js
+
+# Game time.  tfrun will handle launching the compute processes.
+# Merge all your inputs into one mongo file.
+tfrun blastall -p blastp -i $INPUT -m 8 -e 1e-2 -b 2 -F 'm S' -a 1 $BLAST_Z_ARG -d $DB -o $OUTPUT

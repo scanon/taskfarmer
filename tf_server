@@ -13,6 +13,7 @@ my $input;
 # Parameters
 #
 my $BATCHSIZE=32;
+my $batchbytes=0;
 my $TIMEOUT=1800;
 my $TIMEOUT_SOCKET=10;
 my $MAXRETRY=8;
@@ -26,6 +27,7 @@ my $pidfile;
 
 # Override defaults
 $BATCHSIZE=$ENV{BATCHSIZE} if defined $ENV{BATCHSIZE};
+$batchbytes=$ENV{BATCHSIZE} if defined $ENV{BATCHSIZE};
 $TIMEOUT=$ENV{SERVER_TIMEOUT} if defined $ENV{SERVER_TIMEOUT};
 $TIMEOUT_SOCKET=$ENV{SOCKET_TIMEOUT} if defined $ENV{SOCKET_TIMEOUT};
 $port=$ENV{PORT} if defined $ENV{PORT};
@@ -35,10 +37,13 @@ my $statusfile=$ENV{STATUSFILE};
 Getopt::Long::Configure("pass_through");
 my $result = GetOptions ( "i=s" => \$input);
 my $result = GetOptions ( "tfbatchsize=i" => \$BATCHSIZE);
+my $result = GetOptions ( "tfbatchbytes=i" => \$batchbytes);
 my $result = GetOptions ( "tftimeout=i" => \$TIMEOUT);
 my $result = GetOptions ( "tfsocktimeout=i" => \$TIMEOUT_SOCKET);
 my $result = GetOptions ( "tfstatusfile=s" => \$statusfile);
 my $result = GetOptions ( "tfpidfile=s" => \$pidfile);
+
+die "No input file specified\n" unless  defined $input;
 
 my $inputfile=$input;
 $inputfile=~s/.*\///;
@@ -310,7 +315,7 @@ sub send_work{
   my $sent=[];
   my $length;
   my $ct=0;
-  my @list=build_list($BATCHSIZE);
+  my @list=build_list($BATCHSIZE,$batchbytes);
 
 # Send the list if there is one.
 #
@@ -376,9 +381,11 @@ sub flush_output{
 #
 sub build_list{
   my $batchsize=shift;
+  my $batchbytes=shift;
   my @list;
   my @tlist;
   my $ct=0;
+  my $bytes=0;
 
 
 # Build rest from ondeck
@@ -389,8 +396,11 @@ sub build_list{
     push @ondeck, @tlist;
   }
   while ($ct<$batchsize && scalar @ondeck >0){
-    push @list,shift @ondeck;
+    my $id=shift @ondeck;
+    push @list,$id;
+    $bytes+=length($input{$id}->{input});
     $ct++;
+    last if ($batchbytes>0 && $bytes>$batchbytes);
   }
   return @list;
 }
@@ -701,3 +711,76 @@ sub delete_olddata{
     delete $i->{$id} if $i->{$id} && $i->{$id}->{status} eq 'completed';
   }
 }
+
+
+=pod
+
+=head1 NAME
+
+taskfarmer
+
+=head1 SYNOPSIS
+
+Usage:
+
+ tfrun -i <input> <serial app> {arguements for app}
+
+=head1 DESCRIPTION
+
+ The Task Farmer framework makes it easy to run serial
+applications in a parallel environment.  It was originally
+designed to run bioinformatics applications, howevever it can
+work for other applications too.
+
+The B<tf> program (notice how tf bold) works on these items:
+
+=over 4
+
+=item * Files
+
+Just file names in your directory tree. The file name could be a
+regular file, socket, device or a link.
+
+=item * Directories
+
+Yes, it'll work on directories too.
+
+=back
+
+Ship it!
+
+=head1 BUGS
+
+Remember the note about features?
+
+=head1 EXAMPLES
+
+This is a header 1
+
+=head2 Header 2
+
+This is header 2 in I<Italics>.
+
+=head2  Another Header 2
+
+This is header 2 in B<BOLD>.
+
+Another list with non-bulleted items.
+
+=over 5
+
+=item First
+
+This is the First item.
+
+=item Second
+
+This is the Second item.
+
+=item Third
+
+This is the Third item.
+
+=back
+
+=cut
