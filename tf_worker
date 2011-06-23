@@ -6,6 +6,7 @@
 #
 SERVER=$1
 PORT=$2
+
 export TF_TMPDIR=/tmp/$USER-$$
 
 # Source any setup files that are needed for the system.
@@ -50,6 +51,17 @@ cleanup() {
 # Set the trap
 trap cleanup 2 15
 
+launch_threads() {
+  for THREAD in $(seq $THREADS) ; do
+    export ID="$BID-$THREAD"
+    perl $TF_HOME/libexec/taskfarmer/tf_worker_thread $SERVER $PORT $THREAD &
+    PIDS="$PIDS $!"
+  done
+  # Wait for all threads to exit before cleanup
+  wait
+}
+
+
 # Determine the number of threads
 #
 [ -z $THREADS ] && THREADS=$(grep -c processor /proc/cpuinfo)
@@ -57,14 +69,18 @@ trap cleanup 2 15
 # Run the IDCOMMAND
 eval $IDCOMMAND
 export BID=$ID
-for THREAD in $(seq $THREADS) ; do
-  export ID="$BID-$THREAD"
-  perl $TF_HOME/libexec/taskfarmer/tf_worker_thread $SERVER $PORT $THREAD &
-  PIDS="$PIDS $!"
-done
 
-# Wait for all threads to exit before cleanup
-wait
+if [ ! -z $TF_SERVERS ] ; then
+  for l in $(cat $TF_SERVERS|awk -F: '{print $1":"$2}') ; do
+    SERVER=$(echo $l|awk -F: '{print $1}')
+    PORT=$(echo $l|awk -F: '{print $2}')
+    echo "Starting with server: $SERVER and port: $PORT"
+    launch_threads
+  done
+else
+  launch_threads
+fi
+
 
 # Cleanup Cleanup everybody do their share
 #

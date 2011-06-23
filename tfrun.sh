@@ -32,7 +32,7 @@ fi
 
 # Get the address for the server
 #
-if [ -z $TF_ADDR ] && [ -z $TF_PORT ] ; then
+if [ -z $TF_ADDR ] && [ -z $TF_PORT ] && [ $# -gt 0 ] ; then
   export TF_ADDR=$(/sbin/ifconfig $INT|grep 'inet addr'|awk -F: '{print $2}'|sed 's/ .*//')
 
 # Start the server and record the PID

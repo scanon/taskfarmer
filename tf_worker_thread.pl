@@ -5,8 +5,8 @@
 #
 # Author: Shane Canon
 #
-# TODOs:
-# - Improve error handling when writing to the socket
+# TODO Improve error handling when writing to the socket
+# TODO Add Heartbeat
 #
 use IO::Handle;
 use IO::File;
@@ -30,6 +30,7 @@ sleep $THREAD;
 my $TIMEOUT=45;
 my $MAX_RETRIES=10;
 my $SLEEP=20;
+my $TESTING=1 if (defined $ENV{TF_TESTING});
 
 # This is our work area
 #
@@ -83,18 +84,25 @@ sub catfiles {
   opendir(DIR, ".") or die "cann't opendir: $!";
   my @files = readdir(DIR);
   closedir DIR;
-  foreach (@files){
-    next if ($_ eq "." || $_ eq "..");
-    next if (defined $ENV{GETFILES} && ! /$ENV{GETFILES}/ );
-    next unless (-f $_);
-    print $sock "FILE $_\n";
-    open(F,"$_");
+  my $nfiles=scalar @files-2;
+  print $sock "FILES $nfiles\n";
+  foreach my $file (@files){
+    next if ($file eq "." || $file eq "..");
+    next if (defined $ENV{GETFILES} && ! $file=~/$ENV{GETFILES}/ );
+    next unless (-f $file);
+    my @s=stat $file;
+    my $size=$s[7];
+    induce_errors(\$size) if $TESTING;
+    next if induce_errors(\"skip");
+    return if induce_errors(\"drop");
+    print $sock "FILE $file $size\n";
+    open(F,"$file");
     while(<F>){
       print $sock $_;
     }
     close F;
     print $sock "DONE\n";
-    unlink "$TMPDIR/$_";
+    unlink "$TMPDIR/$file";
   }
 # Cleanup any files in the work directory
 #
@@ -103,6 +111,21 @@ sub catfiles {
   }
 }
 
+sub induce_errors{
+	my $var=shift;
+	    
+	if ($$var eq 'skip'){
+	  return 1 if -e "skipfile";
+	}
+	elsif ($$var eq 'drop'){
+		return 1 if -e "drop";
+	}
+    elsif ( -e "testreaderror"){
+    	print stderr "Induce readerror\n";
+    	${$var}++;
+    }
+    return 0;
+}
 # Read the args from the server
 #
 sub read_args {

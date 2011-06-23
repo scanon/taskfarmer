@@ -7,14 +7,11 @@ export NERSC_HOST=test
 if [ $# -eq 0 ] ; then
   . ./functions.t
   setup
-  cleanup
   export SERVER_TIMEOUT=1
   export SOCKET_TIMEOUT=1
 
-  export ARG_OUT=`pwd`/test.args
-
   echo "Starting server"
-  $TF_HOME/bin/tfrun --tfstatusfile status -i $TFILE `pwd`/$0 arg1 arg2 'a b' > test.out 2> test.err
+  $TF_HOME/bin/tfrun --tfstatusfile status -i $TFILE $ME arg1  > test.out 2> test.err
 
 # Everything has ran.  Now let us see how it did
   echo "Checking Results"
