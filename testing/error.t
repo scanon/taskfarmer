@@ -11,7 +11,7 @@ if [ $# -eq 0 ] ; then
 
 #  export DEBUGDIR=`pwd`/debug
 #  mkdir $DEBUGDIR
-  $TF_HOME/bin/tfrun --tfpidfile $PIDFILE -i $TFILE `pwd`/$0 arg1 arg2 'a b' > test.out 2> test.err
+  $TF_HOME/bin/tfrun --tfpidfile $PIDFILE -i $TFILE $ME arg1 > test.out 2> test.err
 
 # Everything has ran.  Now let us see how it did
   echo "Checking Results"
@@ -24,7 +24,6 @@ else
 
   OUT=$(wc)
 
-# Get ARGS
   if [ $STEP -eq 2 ] ; then
     echo "bog" > file
     echo "blah" > file2

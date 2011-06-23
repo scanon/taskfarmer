@@ -4,7 +4,6 @@ prefix := /usr
 NAME	= taskfarmer
 
 BINFILES=	tfrun
-LIBEXECFILES=	tf_worker tf_server tf_worker_thread
 SHAREFILES=	share/*.conf share/submit_es.q share/stage.cacher
 EXAMPLEFILES=	examples/stage.sh examples/fix_perl_path.sh examples/sample.sh examples/pack.sh \
 		examples/blast.qsub examples/stage.cloud.sh examples/sample.qsub examples/run.cloud
@@ -17,11 +16,13 @@ EXAMPLESDIR=	$(SHAREDIR)/examples
 all:
 
 install:
-	install -d -D $(BINDIR)
-	install -d -D $(LIBEXECDIR)
-	install -d -D $(SHAREDIR)
-	install -d -D $(EXAMPLESDIR)
-	install -t $(BINDIR) $(BINFILES)
-	install -t $(LIBEXECDIR) $(LIBEXECFILES)
+	install -d $(BINDIR)
+	install -d $(LIBEXECDIR)
+	install -d $(SHAREDIR)
+	install -d $(EXAMPLESDIR)
+	install tfrun.sh $(BINDIR)/tfrun
+	install tf_server.pl $(LIBEXECDIR)/tf_server
+	install tf_worker_thread.pl $(LIBEXECDIR)/tf_worker_thread
+	install tf_worker $(LIBEXECDIR)/tf_worker
 	install -m 644 -t $(SHAREDIR) $(SHAREFILES)
 	install -m 644 -t $(EXAMPLESDIR) $(EXAMPLEFILES)
