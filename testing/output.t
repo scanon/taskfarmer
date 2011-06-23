@@ -16,7 +16,10 @@ if [ $# -eq 0 ] ; then
   PLINES=$( cat progress.$TFILE |sed 's/,/\n/g'|wc -l)
   ELINES=$( grep -c '^>' $TFILE)
   [ $PLINES -eq $ELINES ] || echo "Didn't process all lines $PLINES vs $ELINES"
+<<<<<<< HEAD
   ls -l done.$TFILE
+=======
+>>>>>>> 917b14cbb14d34e16579fcdfc160487f6441a722
 else
   OUT=$(wc)
   echo $OUT
