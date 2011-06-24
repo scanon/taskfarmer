@@ -31,7 +31,7 @@ sleep $THREAD;
 my $TIMEOUT=45;
 my $MAX_RETRIES=10;
 my $SLEEP=20;
-my $heartbeattime=1;
+my $heartbeattime=300;
 my $polltime=0.5;
 my $TESTING=1 if (defined $ENV{TF_TESTING});
 

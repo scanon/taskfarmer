@@ -221,8 +221,7 @@ sub do_request {
 	# Read from client.  Process requests and reponse.
 	#
 	while (<$sock>) {
-		DEBUG("COMMAND: $_");
-		# print $_;
+#		DEBUG("COMMAND: $_");
 		if (/^RESULTS /) {
 			my ( $command, $jstep ) = split;
 			chomp $jstep;
