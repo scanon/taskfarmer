@@ -1,6 +1,6 @@
 #!/usr/bin/env perl
 
-# TODO
+# TODO Close files that aren't accessed for a while
 
 use Socket;
 use IO::Handle;
@@ -17,10 +17,13 @@ my $BATCHSIZE      = 32;
 my $batchbytes     = 0;
 my $TIMEOUT        = 1800;
 my $TIMEOUT_SOCKET = 10;
+my $heartbeatto    = 600;
 my $MAXRETRY       = 8;
 my $MAXBUFF        = 100 * 1024 * 1024;    # 100M buffer
 my $FLUSHTIME      = 20;                   # write
 my $WINDOWTIME     = 60 * 10;              # 10 minutes
+my $polltime	   = 600;
+my $closetime	   = 600;
 my $FR_FILE;
 my $port;
 my $sockfile;
@@ -42,9 +45,11 @@ my $result = GetOptions( "tfbatchsize=i"   => \$BATCHSIZE );
 my $result = GetOptions( "tfbatchbytes=i"  => \$batchbytes );
 my $result = GetOptions( "tftimeout=i"     => \$TIMEOUT );
 my $result = GetOptions( "tfsocktimeout=i" => \$TIMEOUT_SOCKET );
+my $result = GetOptions( "tfsockfile=s"    => \$sockfile );
 my $result = GetOptions( "tfstatusfile=s"  => \$statusfile );
 my $result = GetOptions( "tfpidfile=s"     => \$pidfile );
 my $result = GetOptions( "tfdebuglevel=i"  => \$debuglevel );
+my $result = GetOptions( "tfheartbeat=i"   => \$heartbeatto );
 
 die "No input file specified\n" unless defined $input;
 
@@ -62,12 +67,15 @@ my %scratchbuffer;
 my %job;
 my @ondeck;
 my @failed;
+my @buffered;
 my $item;
 my $offset;
 my $index;
+$polltime=$TIMEOUT;
+$polltime=$heartbeatto if ($TIMEOUT>$heartbeatto);
 my $next_flush  = time + $FLUSHTIME;
 my $next_status = time + $FLUSHTIME;
-my $next_check  = time + $TIMEOUT;
+my $next_check  = time + $polltime;
 my $processed   = 0;
 my $buffer_size = 0;
 my $chunksize   = 2 * $BATCHSIZE;
@@ -279,8 +287,16 @@ sub do_request {
 		}
 		elsif (/^MESSAGE /) {
 			chomp;
-			s/MESSAGE //;
+			s/^MESSAGE //;
 			print stderr "MESSAGE: $_\n";
+		}
+		elsif (/^HEARTBEAT /) {
+			chomp;
+			s/^HEARTBEAT //;
+			my @items=split;
+			my $jstep=shift @items;
+			update_job_stats($jstep,@items);
+			DEBUG("Got Heartbeat for $jstep");
 		}
 		elsif (/^STATUS/) {
 			if ($shutdown) {
@@ -318,19 +334,7 @@ sub read_file {
 	DEBUG("Reading $file size $size");
 	while (<$sock>) {
 		last if /^DONE$/;
-#		next unless $write;    # should we write out stderr?
-
-		#		if ( $file eq "stdout" ) {
-		#			$
-		#			print stdout $_;
-		#		}
-		#		elsif ( $file eq "stderr" ) {
-		#			print stderr $_;
-		#		}
-		#		else {
 		$scratchbuffer{$file} .= $_;
-
-		#		}
 		$bytes += length $_;
 	}
 	if ( $bytes == $size ) {
@@ -355,15 +359,7 @@ sub process_results {
 #
 	foreach my $file (keys %scratchbuffer){
 		DEBUG("Copying $file to buffer");
-		if ( $file eq "stdout" ) {
-			print stdout $scratchbuffer{$file};
-		}
-		elsif ( $file eq "stderr" ) {
-			print stderr $scratchbuffer{$file};
-		}
-		else {
-			$output{$file}->{buffer}=$scratchbuffer{$file};
-		}
+		$output{$file}->{buffer}.=$scratchbuffer{$file};
 	}
 	my $inputs = join ",", @{ $job{$jstep}->{list} };
 	my $rtime = time - $job{$jstep}->{start};
@@ -378,7 +374,8 @@ sub process_results {
 	  $processed);
 
 	foreach my $inputid ( @{ $job{$jstep}->{list} } ) {
-		$input{$inputid}->{status} = 'completed';
+		$input{$inputid}->{status} = 'buffered';
+		push @buffered, $inputid;
 	}
 	$processed += $job{$jstep}->{count};
 
@@ -415,6 +412,7 @@ sub send_work {
 		$job{$item}->{list}    = $sent;
 		$job{$item}->{count}   = $ct;
 		$job{$item}->{ident}   = $ident;
+		$job{$item}->{lastheartbeat}=time;
 		INFO("Sent: $item hostid:$ident length:$length");
 		$item++;
 	}
@@ -429,21 +427,38 @@ sub send_work {
 # This tries to keep everything in a consistent state.
 #
 sub flush_output {
+	DEBUG("Flush called");
 	foreach my $file ( keys %output ) {
-		next if ( $file eq 'stdout' || $file eq 'stderr' );
+		my $bf=$output{$file}->{buffer};
 		if ( !defined $output{$file}->{handle} ) {
-			INFO("Opening new file $file");
-			$output{$file}->{handle} = new IO::File ">> $file";
-			die "Unable to open file $file\n"
-			  if !defined $output{$file}->{handle};
+			DEBUG("Opening new file $file");
+			if ($file eq "stdout"){
+				$output{$file}->{handle}=*stdout;
+			}
+			elsif ($file eq "stderr"){
+				$output{$file}->{handle}=*stderr;
+			}
+			else{
+				$output{$file}->{handle} = new IO::File ">> $file";
+			}
 		}
 		my $handle = $output{$file}->{handle};
-		INFO(sprintf "Flushed %ld bytes to %s", length $output{$file}->{buffer},
-		  $file) if (length $output{$file}->{buffer}>0);
-		print {$handle} $output{$file}->{buffer};
-		$handle->flush();
+		if (! defined $handle){
+			ERROR("Unable to open file $file.  Exiting");
+			exit -1;
+		}
+		my $blength = length $output{$file}->{buffer};
+		if ($blength>0){
+			$output{$file}->{lastwrite}=time;
+			DEBUG("Flushed $blength bytes to $file");
+			print {$handle} $output{$file}->{buffer};
+			$handle->flush();
+		}
 		$output{$file}->{buffer} = '';
 	}
+	
+	map {$input{$_}->{status} = 'completed' } @buffered;
+	@buffered=();
 	flush LOG;
 	print PROGRESS $progress_buffer;
 	flush PROGRESS;
@@ -451,7 +466,7 @@ sub flush_output {
 	$buffer_size     = 0;
 
 	my $ct = write_fastrecovery($FR_FILE);
-	printf LOG "Wrote fast recovery (%d items)\n", $ct;
+	DEBUG("Wrote fast recovery ($ct items)");
 	$next_flush = time + $FLUSHTIME;
 }
 
@@ -499,16 +514,20 @@ sub remaining_jobs {
 # Move to retry queue
 #
 sub check_timeouts {
-	my $time = time - $TIMEOUT;
+	DEBUG("Checking timeouts");
 	foreach my $jstep ( keys %job ) {
 		next if $job{$jstep}->{finish};
-		if ( $job{$jstep}->{start} < $time ) {
-			WARN("RETRY: $jstep timed out.  Adding to retry.");
+		my $retry=0;
+		
+		$retry=1 if (time>($job{$jstep}->{lastheartbeat}+$heartbeatto));
+		$retry=1 if ( time>($job{$jstep}->{start} + $TIMEOUT) ) ;
+		if ($retry){
+			WARN("RETRY: $jstep timed out or missed heartbeat.  Adding to retry.");
 			requeue_job($jstep);
 			$counters->{timeouts}++;
 		}
 	}
-	$next_check = time + $TIMEOUT / 2;
+	$next_check = time + $polltime/2;
 }
 
 # Take inputs for job step
@@ -634,6 +653,10 @@ sub write_fastrecovery {
 	# Add failed jobs to the recovery list
 
 	push @recoverylist, @failed;
+	
+	# Add jobs that were buffered but didn't get flushed before
+	# the server quit.
+	push @recoverylist, @buffered;
 
 	# What's in progress
 	foreach my $jstep ( keys %job ) {
@@ -670,6 +693,14 @@ sub initialize_counters {
 	}
 	$c->{quantum} = $q;
 
+}
+
+sub update_job_stats {
+	my $jstep=shift;
+	
+	if (defined $job{$jstep}){
+		$job{$jstep}->{lastheartbeat}=time;
+	}
 }
 
 sub update_counters {

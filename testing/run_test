@@ -2,6 +2,16 @@
 
 # This is what starts things...
 export NERSC_HOST=test
+export TF_HOME=/tmp/tf.$$
+. functions.t
+
+for t in $(ls *.t|grep -v functions.t) ; do
+  echo "Running $t"
+  ./$t
+  echo ""
+done
+
+exit
 
 if [ $# -eq 0 ] ; then
   . functions.t

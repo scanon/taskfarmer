@@ -11,6 +11,7 @@
 use IO::Handle;
 use IO::File;
 use IO::Socket::INET;
+use POSIX qw(:sys_wait_h);
 use strict;
 my $DEBUG=0;
 
@@ -30,6 +31,8 @@ sleep $THREAD;
 my $TIMEOUT=45;
 my $MAX_RETRIES=10;
 my $SLEEP=20;
+my $heartbeattime=1;
+my $polltime=0.5;
 my $TESTING=1 if (defined $ENV{TF_TESTING});
 
 # This is our work area
@@ -39,6 +42,8 @@ die "TF_TMPDIR doesn't exist\n" if (! -e $ENV{TF_TMPDIR});
 
 my $TMPDIR="$ENV{TF_TMPDIR}/$THREAD";
 my $IGNORE_RETURN=1 if defined $ENV{IGNORE_RETURN};
+
+$heartbeattime=$ENV{TF_HEARTBEAT} if defined $ENV{TF_HEARTBEAT};
 
 # Get our ID
 my $ID="unknown";
@@ -64,7 +69,7 @@ my $status=0;
 while ( ($step=send_and_get($SERVER,$PORT,$step,$status)) >= 0 ){
 # Run the users code
   $ENV{STEP}=$step;
-  $status=run_application($app,$input,@args);
+  $status=run_application($SERVER,$PORT,$step,$app,$input,@args);
 }
 if ($step eq -1){
   print STDERR "$ID: Connection Error to $SERVER($PORT)\n";
@@ -92,9 +97,9 @@ sub catfiles {
     next unless (-f $file);
     my @s=stat $file;
     my $size=$s[7];
-    induce_errors(\$size) if $TESTING;
-    next if induce_errors(\"skip");
-    return if induce_errors(\"drop");
+    $size++ if induce_errors("size");
+    next if induce_errors("skip");
+    return if induce_errors("drop");
     print $sock "FILE $file $size\n";
     open(F,"$file");
     while(<F>){
@@ -112,18 +117,12 @@ sub catfiles {
 }
 
 sub induce_errors{
-	my $var=shift;
-	    
-	if ($$var eq 'skip'){
-	  return 1 if -e "skipfile";
-	}
-	elsif ($$var eq 'drop'){
-		return 1 if -e "drop";
-	}
-    elsif ( -e "testreaderror"){
-    	print stderr "Induce readerror\n";
-    	${$var}++;
-    }
+	my $type=shift;
+	
+	return 0 unless (defined $TESTING);
+	return 1 if ($type eq 'skip' && -e "skipfile");
+	return 1 if ($type eq 'drop' && -e "drop");
+	return 1 if ($type eq 'size' && -e "testreaderror");
     return 0;
 }
 # Read the args from the server
@@ -222,6 +221,22 @@ sub send_and_get {
   return $step;
 }
 
+sub heartbeat{
+	my $server=shift;
+	my $port=shift;
+	my $step=shift;
+	
+  	my $sock=connect_server($server,$port);
+  	return -1 unless $sock;
+  	printf $sock "IDENT %s\n",$ID;
+  	
+  	print $sock "HEARTBEAT $step ".get_stats()."\n";
+}
+
+sub get_stats{
+	return "status=running";
+}
+
 sub save_errors{
   my $ddir=shift;
   
@@ -242,30 +257,48 @@ sub save_errors{
 # be pushed back.
 # 
 sub run_application{
+	my $server=shift;
+	my $port=shift;
+	my $step=shift;
   my $app=shift;
   my $input=shift;
+  my $exit;
+  my $pid;
 
-  open my $oldout, ">&STDOUT" or die "Can't dup STDOUT: $!";
-  open my $olderr, ">&STDERR" or die "Can't dup STDERR: $!";
-  open STDOUT, '>', "stdout" or die "Can't redirect STDOUT: $!";
-  open STDERR, '>', "stderr" or die "Can't redirect STDERR: $!";
-  select STDOUT; $| = 1;
-  select STDERR; $| = 1;
-
-  my $st=open(APP,"|-",$app,@_);
-  if (!$st){
-    print $olderr "Error: not able to execute or find $app ($st)\n";
-    die;
+  my $pid=fork();
+  if ($pid>0){
+  	my $lasthb=0;
+  	while (waitpid($pid,WNOHANG)==0){
+  		if (time>($lasthb+$heartbeattime)){
+  			heartbeat($server,$port,$step);
+  			$lasthb=time;
+  		}
+  		select(undef, undef, undef, $polltime);
+  	}
+  	$exit=$?>>8;
   }
+  else{
+#  open my $oldout, ">&STDOUT" or die "Can't dup STDOUT: $!";
+    open my $olderr, ">&STDERR" or die "Can't dup STDERR: $!";
+	open STDOUT, '>', "stdout" or die "Can't redirect STDOUT: $!";
+  	open STDERR, '>', "stderr" or die "Can't redirect STDERR: $!";
+  	select STDOUT; $| = 1;
+  	select STDERR; $| = 1;
+	  my $st=open(APP,"|-",$app,@_);
+	  if (!$st){
+    	print $olderr "Error: not able to execute or find $app ($st)\n";
+    	die;
+  	  }
 # Print the input to the application
-  print APP $input;
-  close APP;
-  my $exit=$?;
+  	print APP $input;
+  	close APP;
+  	exit($? >> 8);
+  }
 # Restore stdout and stderr
 #
-  open STDOUT, ">&", $oldout or die "Can't dup \$oldout: $!";
-  open STDERR, ">&", $olderr or die "Can't dup \$olderr: $!";
-  close $oldout;
-  close $olderr;
+#  open STDOUT, ">&", $oldout or die "Can't dup \$oldout: $!";
+#  open STDERR, ">&", $olderr or die "Can't dup \$olderr: $!";
+#  close $oldout;
+#  close $olderr;
   return $exit;
 }
