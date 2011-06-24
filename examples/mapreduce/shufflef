@@ -1,0 +1,35 @@
+#!/usr/bin/perl
+#use strict;
+
+my $ODIR=$ARGV[0];
+my $BASE=$ARGV[1];
+my $SPLIT=$ARGV[2];
+
+my %files;
+my $f;
+my $fct=0;
+my $ct=0;
+
+$|=1;
+while(<STDIN>){
+  ($f,$line)=split / /;
+  
+  if (! defined $files{$f}){ 
+     close_files() if ($fct>2000);
+     mkdir "$ODIR/$f";
+     open($files{$f}, ">> $ODIR/$f/$BASE.$SPLIT") or die "Unable to open output file $OFILE.$f.$SPLIT"; 
+     $fct++;
+  }
+  print {$files{$f}} $line;
+       
+  $ct++; 
+}
+close_files();
+
+sub close_files{
+  for my $f (keys %files){
+    close $files{$f};
+    delete $files{$f};
+  }
+  $fct=0;
+}

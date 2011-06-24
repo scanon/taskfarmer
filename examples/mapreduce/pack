@@ -1,0 +1,33 @@
+#!/usr/bin/env perl
+
+use Archive::Zip;
+
+$FILE=$ARGV[0];
+
+my $zip = Archive::Zip->new( );
+while(<STDIN>){
+ @l=split;
+ $prev=$l[0] if ! defined $prev;
+
+ if ($l[0] eq $prev){
+   $buffer.=$_;
+ }
+ else{
+   add($buffer,$prev);
+   $prev=$l[0];
+   $buffer=$_;
+   $count++;
+   last if ($count>100000);
+ }
+}
+
+add($buffer,$prev);
+my $status = $zip->writeToFileNamed( $FILE );
+
+sub add{
+ my $buffer=shift;
+ my $name=shift;
+   $name=~s/\//_/g;
+#    print "$name\n";
+   my $member = $zip->addString ($buffer,$name);
+}

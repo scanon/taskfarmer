@@ -1,0 +1,60 @@
+#!/bin/sh
+#
+#
+#PBS -l walltime=01:00:00
+#PBS -q regular
+#PBS -V
+
+# Check for taskfarmer
+which tfrun > /dev/null
+[ $? ] || exit
+
+if [ -z "$PBS_JOBID" ] ; then
+  [ -z "$CORES" ] && export CORES=240
+  if [ $# -lt 2 ] ; then
+    echo "Usage: $0 <INPUT FILE> <OUTPUT DIR>"
+    exit
+  fi
+
+  export SDIR=$(dirname $0)
+  export ME=$(basename $0)
+  if [ "$SDIR"="." ] ; then
+    B=$(which $0)
+    SDIR=$(dirname $B)
+  fi
+  export PATH=$PATH:$SDIR
+  echo "Submitting a job with $CORES cores"
+  export IFILE=$1
+  export OUT=$2
+  (echo $IFILE|grep -c '^/' > /dev/null) || IFILE="$(pwd)/$IFILE"
+  (echo $OUT|grep -c '^/' > /dev/null) || OUT="$(pwd)/$OUT"
+  echo "Processing $IFILE $OUT"
+  qsub -N SHUFFLE -l mppwidth=$CORES $SDIR/$ME
+  exit
+fi
+cd $PBS_O_WORKDIR
+export THREADS=6
+export BATCHSIZE=1
+export CHUNK=1073741824
+[ -z $MAP ] && export MAP=map
+
+if [ $# -eq 0 ] ; then
+# Generate the input
+  LIST=$PBS_JOBID.in
+  export PBS_JOBID
+  BYTES=$(stat -Lc '%s' $IFILE)
+  let MAX=1+$BYTES/$CHUNK
+  seq -f "> %g" 0 $MAX > $LIST
+  tfrun -i $LIST $SDIR/$ME $IFILE $OUT
+  check_progress $LIST
+  if [ $? -eq 0 ] ; then 
+    rm $LIST *.$LIST
+    touch done.$IFILE
+  fi
+else
+  export IFILE=$1
+  export OUT=$2
+  export BASE=$(basename $IFILE)
+  STEP=$(cat /dev/stdin|sed 's/> //')
+  splitf $IFILE $CHUNK $STEP|$MAP|shufflef $OUT $BASE $STEP
+fi

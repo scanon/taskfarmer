@@ -16,11 +16,13 @@
 # * cleanup running servers
 
 use strict;
+use Cwd;
 
-my $serverfile="servers";
+my $serverfile=cwd()."/servers";
 my $hostname="nid05416";  # Name reported by hostname on the node
 my $rhost="hmom01";       # Name used to ssh to the host (different on hopper)
 my $window=300;
+my $donefile="done";
 
 # if there is just a single -k then do a clean up.
 #
@@ -41,12 +43,13 @@ if ( !defined $ENV{PBS_JOBID}){
   exit;
 }
 
-print stderr "Running script\n" if defined $ENV{DEBUGTF};
+print STDERR "Running script\n" if defined $ENV{DEBUGTF};
 # Temporary output file.
 my $temp="tmp$$.hmm";
 # Parser;
 my $parser="parse_hmm_out.pl";
 $parser=$ENV{PARSER} if (defined $ENV{PARSER});
+$SIG{INT} = \&cleanup;
 
 open(OUT,"> $temp") or die "Unable to open temporary file\n";
 # Read from stdin the file to read from and the offset.
@@ -88,20 +91,25 @@ for (my $i=0;$i<scalar @ARGV;$i++){
 # that contains one (or more depending on the BATCHSIZE)
 # models.
 #
-print stderr "Running hmmsearch\n" if defined $ENV{DEBUGTF};
+print STDERR "Running hmmsearch\n" if defined $ENV{DEBUGTF};
 my $cmd="hmmsearch ".join( " ",@ARGV)." $temp $query";
-print stderr "Cmd: $cmd\n" if defined $ENV{DEBUGTF};
-print `$cmd`;
+print STDERR "Cmd: $cmd\n" if defined $ENV{DEBUGTF};
+system($cmd);
 # Check the exit;
-my $RET=$?;
-print stderr "Exited with $RET\n" if defined $ENV{DEBUGTF};
-exit $RET if ($RET);
-unlink $temp;
+my $RET=$?>>8;
+print STDERR "Exited with $RET\n" if defined $ENV{DEBUGTF};
+exit $RET if ($RET ne 0);
+unlink $temp if ( -e $temp);
 
-print stderr "Running parser: $parser\n" if defined $ENV{DEBUGTF};
-print `$parser $output`;
-unlink $output;
-exit;
+print STDERR "Running parser: $parser\n" if defined $ENV{DEBUGTF};
+system("$parser $output");
+$RET=$?>>8;
+print STDERR "Parser exited with $RET\n" if defined $ENV{DEBUGTF};
+unlink $output if ( -e $output);
+print STDERR "No done file\n" if (defined $ENV{DEBUGTF} && ! -e $donefile);
+exit 1 if ( ! -e $donefile );
+unlink $donefile;
+exit $RET;
 
 
 sub start_server{
@@ -162,7 +170,7 @@ sub start_server{
       generate_input($models,$input);
     }
     # Configure environment for task farmer.
-    $ENV{TF_HOME}="/global/common/carver/tig/taskfarmer/1.4/";
+    $ENV{TF_HOME}="/global/common/carver/tig/taskfarmer/1.5/";
     $ENV{BATCHSIZE}=1;
     $ENV{SERVER_TIMEOUT}=1700;
     $ENV{SERVER_ONLY}=1;
@@ -213,11 +221,11 @@ sub gindex{
   my @s=stat $file;
   open(I,$file) or die "Unable to open $file\n";
   open(O,"> $index");
-  print stderr "Generating index for $file\n";
+  print STDERR "Generating index for $file\n";
   while(<I>){
     if (/^HMMER3/){
       print O pack "Q",tell(I)-length($_);
-      printf stderr "%4d %%\r",100*tell(I)/$s[7];
+      printf STDERR "%4d %%\r",100*tell(I)/$s[7];
     }
   }
   close I;
@@ -228,10 +236,14 @@ sub gindex{
 sub cleanup_servers{
   my $serverfile=shift;
 
-  open(S,"$serverfile") or die "No servers.  Exiting.";
+  open(S,"$serverfile") or die "No servers ($serverfile).  Exiting.";
   while(<S>){
    my ($host,$port,$pid,$rest)=split /:/;
    print `ssh -q $rhost kill $pid`;
   }
   unlink $serverfile;
+}
+
+sub cleanup{
+  exit 1;
 }
