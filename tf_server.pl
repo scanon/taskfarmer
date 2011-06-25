@@ -32,7 +32,7 @@ my $debuglevel=1;
 
 # Override defaults
 $BATCHSIZE      = $ENV{BATCHSIZE}      if defined $ENV{BATCHSIZE};
-$batchbytes     = $ENV{BATCHSIZE}      if defined $ENV{BATCHSIZE};
+$batchbytes     = $ENV{BATCHBYTES}     if defined $ENV{BATCHBYTES};
 $TIMEOUT        = $ENV{SERVER_TIMEOUT} if defined $ENV{SERVER_TIMEOUT};
 $TIMEOUT_SOCKET = $ENV{SOCKET_TIMEOUT} if defined $ENV{SOCKET_TIMEOUT};
 $port           = $ENV{PORT}           if defined $ENV{PORT};
