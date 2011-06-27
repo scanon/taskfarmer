@@ -6,7 +6,6 @@
 # Author: Shane Canon
 #
 # TODO Improve error handling when writing to the socket
-# TODO Add Heartbeat
 #
 use IO::Handle;
 use IO::File;

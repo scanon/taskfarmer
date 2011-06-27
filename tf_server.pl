@@ -225,7 +225,6 @@ sub do_request {
 		if (/^RESULTS /) {
 			my ( $command, $jstep ) = split;
 			chomp $jstep;
-			my $expected = defined $job{$jstep};
 			my $bytes    = 0;
 			my $success  = 1;
 			my $nfiles;
@@ -236,7 +235,7 @@ sub do_request {
 					DEBUG("Number of files: $nfiles for $jstep");
 				}
 				last if /^DONE$/;
-				my $readbytes = read_file( $sock, $_, $expected ) if /^FILE /;
+				my $readbytes = read_file( $sock, $_ ) if /^FILE /;
 				if ( $readbytes < 0 ) {
 					ERROR("Truncated read in Job step $jstep");
 					$success = 0;
@@ -324,7 +323,7 @@ sub do_request {
 #
 sub read_file {
 	my $sock = shift;
-	$_ = shift;	my $write = shift;
+	$_ = shift;
 
 	my $clientaddr = $sock->peerhost();
 	my $bytes      = 0;
@@ -332,14 +331,21 @@ sub read_file {
 	$scratchbuffer{$file}="";
 	DEBUG("Reading $file size $size");
 	while (<$sock>) {
-		last if /^DONE$/;
-		$scratchbuffer{$file} .= $_;
 		$bytes += length $_;
+		if (/DONE$/ && $bytes>$size){
+                  s/DONE$//;
+		  $scratchbuffer{$file} .= $_;
+		  $bytes -= 5; # Subtrace off the DONE marker
+		  last;
+                }
+		$scratchbuffer{$file} .= $_;
+#		$bytes += length $_;
 	}
 	if ( $bytes == $size ) {
 		return $bytes;
 	}
 	else {
+		ERROR("Read error on $file.  Read $bytes versus $size");
 		return -1;
 	}
 }
