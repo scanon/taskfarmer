@@ -327,21 +327,27 @@ sub read_file {
 
 	my $clientaddr = $sock->peerhost();
 	my $bytes      = 0;
+	my $alert      = 0;
 	my ( $command, $file, $size ) = split;
 	$scratchbuffer{$file}="";
 	DEBUG("Reading $file size $size");
 	while (<$sock>) {
 		$bytes += length $_;
 		if (/DONE$/ && $bytes>$size){
-                  s/DONE$//;
+                  s/DONE\n//;
 		  $scratchbuffer{$file} .= $_;
-		  $bytes -= 5; # Subtrace off the DONE marker
+		  $bytes -= 5; # Subtract off the DONE marker
 		  last;
                 }
+		elsif ($bytes>$size && ! $alert ){
+		  INFO("Overrun: for $file: $_");
+		  INFO("Continue to read.");
+		  $alert=1;
+		}
 		$scratchbuffer{$file} .= $_;
-#		$bytes += length $_;
 	}
 	if ( $bytes == $size ) {
+		DEBUG("Read $file correctly.  Read $bytes versus $size");
 		return $bytes;
 	}
 	else {
