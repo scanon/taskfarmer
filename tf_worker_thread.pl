@@ -42,6 +42,7 @@ die "TF_TMPDIR doesn't exist\n" if (! -e $ENV{TF_TMPDIR});
 my $TMPDIR="$ENV{TF_TMPDIR}/$THREAD";
 my $IGNORE_RETURN=1 if defined $ENV{IGNORE_RETURN};
 
+$polltime=$ENV{TF_POLLTIME} if defined $ENV{TF_POLLTIME};
 $heartbeattime=$ENV{TF_HEARTBEAT} if defined $ENV{TF_HEARTBEAT};
 
 # Get our ID
