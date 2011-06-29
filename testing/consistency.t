@@ -9,20 +9,16 @@ if [ $# -eq 0 ] ; then
   cleanup
   export PIDFILE=`pwd`/tf.pid
 
-  echo "Starting server.  This will get killed as part of test."
   export LOOP=1
   $TF_HOME/bin/tfrun --tfbatchsize=32 --tfdebuglevel=5 --tfpidfile $PIDFILE -i $TFILE $ME arg1 > test.out 2> test.err
-  [ -s fastrecovery.$TFILE ] || echo "Fastrecovery file is empty on kill. Not much of a test."
+  [ -s fastrecovery.$TFILE ] || error "Fastrecovery file is empty on kill. Not much of a test."
   export LOOP=2
-  echo "Restarting server"
-  cat fastrecovery.$TFILE
   $TF_HOME/bin/tfrun --tfbatchsize=32 --tfdebuglevel=5 --tfpidfile $PIDFILE -i $TFILE $ME arg1 >> test.out 2>> test.err
 
 # Everything has ran.  Now let us see how it did
-  echo "Checking Results"
-  diff --brief -u test.out $TFILE
-  ls -l test.out $TFILE
-
+  diff --brief -u test.out $TFILE > /dev/null
+  [ $? ] || error "Different"
+  okay
 # Cleanup
 else
 

@@ -8,13 +8,19 @@ if [ $# -eq 0 ] ; then
   setup
   cleanup
   export TF_TESTING=1
+  export TF_SERVERS=`pwd`/servers
 
-  $TF_HOME/bin/tfrun --tfdebuglevel=3 -i $TFILE $ME arg1 > test.out 2> test.err
+  echo -n "."
+  SERVER_ONLY=1 $TF_HOME/bin/tfrun --tfheartbeat=4 --tfdebuglevel=5 -i $TFILE $ME arg1 > test.out 2> test.err &
+  sleep 2
+  echo -n "."
+  $TF_HOME/bin/tfrun > client.out 2> client.err
+  echo -n "."
+  $TF_HOME/bin/tfrun > client2.out 2> client2.err
+  echo -n "."
 
 # Everything has ran.  Now let us see how it did
-  grep TEST test.out
-  [ -e blah ] && error "File got through"
-  [ $(grep -c Missing log.$TFILE) -eq 1 ] || error "Missing files as expected"
+  [ $(grep -c Missing log.$TFILE) -eq 1 ] && error "Missing files as expected"
   PLINES=$( cat progress.$TFILE |sed 's/,/\n/g'|wc -l)
   ELINES=$( grep -c '^>' $TFILE)
   [ $PLINES -eq $ELINES ] || error "Didn't process all lines $PLINES vs $ELINES"
@@ -22,10 +28,9 @@ if [ $# -eq 0 ] ; then
 else
   OUT=$(wc)
 
+  [ -e testhang ] && rm testhang
   if [ $STEP -eq 1 ] ; then
-    echo "TEST: You shouldn't see this"
-    touch blah
-    touch skipfile 
+    touch testhang 
   fi
   echo $OUT
   

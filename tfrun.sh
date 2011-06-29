@@ -86,7 +86,6 @@ if [ -z $EXTERNAL_SERVER ] ; then
     [ -d /proc/$PID ]  && kill -INT $PID > /dev/null 2>&1
     [ -d /proc/$PID ]  && kill -INT $PID > /dev/null 2>&1
     [ -d /proc/$PID ]  && kill $PID > /dev/null 2>&1
-    rm $PIDFILE
   fi
   [ -e $SOCKFILE ] && rm $SOCKFILE
 fi

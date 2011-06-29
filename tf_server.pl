@@ -8,6 +8,7 @@ use IO::File;
 use IO::Socket::INET;
 use strict;
 use Getopt::Long;
+use Carp qw(cluck);
 
 my $input;
 
@@ -22,13 +23,14 @@ my $MAXRETRY       = 8;
 my $MAXBUFF        = 100 * 1024 * 1024;    # 100M buffer
 my $FLUSHTIME      = 20;                   # write
 my $WINDOWTIME     = 60 * 10;              # 10 minutes
-my $polltime	   = 600;
-my $closetime	   = 600;
+my $polltime       = 600;
+my $closetime      = 600;
+my $reqtimeout     = 10;
 my $FR_FILE;
 my $port;
 my $sockfile;
 my $pidfile;
-my $debuglevel=1;
+my $debuglevel = 1;
 
 # Override defaults
 $BATCHSIZE      = $ENV{BATCHSIZE}      if defined $ENV{BATCHSIZE};
@@ -71,8 +73,8 @@ my @buffered;
 my $item;
 my $offset;
 my $index;
-$polltime=$TIMEOUT;
-$polltime=$heartbeatto if ($TIMEOUT>$heartbeatto);
+$polltime = $TIMEOUT;
+$polltime = $heartbeatto if ( $TIMEOUT > $heartbeatto );
 my $next_flush  = time + $FLUSHTIME;
 my $next_status = time + $FLUSHTIME;
 my $next_check  = time + $polltime;
@@ -96,7 +98,7 @@ my %sockargs = (
 $sockargs{LocalPort} = $port if defined $port;
 
 my $sock = new IO::Socket::INET->new(%sockargs)
-  or die "Unable to create socket\n";
+	or die "Unable to create socket\n";
 
 if ( defined $sockfile ) {
 	open( SF, "> $sockfile" ) or die "Unable to open socket file\n";
@@ -128,15 +130,30 @@ open( LOG,      ">> ./log.$inputfile" );
 select LOG;
 $| = 1;
 select STDOUT;
-$SIG{INT} = \&catch_int;    # best strategy
+# Catch sigint and do a drain.
+#
+$SIG{INT} = \&catch_int;
 
+# This is so we can get a backtrace in cases where things get wedged.
+#
+$SIG{'USR2'} = sub { 
+	ERROR("Caught SIGUSR2.  Dumping backtrace and exiting.");
+    Carp::confess("Dumping backtrace.");
+};
 # This is the main work loop.
 while ( $remaining_jobs || $remaining_inputs ) {
 	my $new_sock = $sock->accept();
 	if ( defined $new_sock ) {
 		my $clientaddr = $new_sock->peerhost();
-		my $status     = do_request($new_sock);
-
+		eval {
+			local $SIG{ALRM} =
+				sub { snapshottimeout($clientaddr); die "alarm\n" }; # NB: \n required
+			# Let's give the request handler a fixed amount of time.  Just in case something
+			# gets dropped in the middle.
+			alarm $reqtimeout;
+			my $status = do_request($new_sock);
+			alarm 0;
+		};
 		close $new_sock;
 	}
 	check_timeouts() if ( time > $next_check );
@@ -144,7 +161,7 @@ while ( $remaining_jobs || $remaining_inputs ) {
 	if ( time > $next_status ) {
 		update_counters( $counters, \%job, \%input, \@ondeck );
 		write_stats( $counters, \%job, \%input, \@ondeck, $statusfile )
-		  if defined $statusfile;
+			if defined $statusfile;
 		delete_olddata( \%job, \%input );
 		$next_status = time + $FLUSHTIME;
 	}
@@ -153,23 +170,23 @@ while ( $remaining_jobs || $remaining_inputs ) {
 	if ( eof($inputf) || $shutdown ) {
 		$shutdown       = 1;    # In case eof got us here.
 		$remaining_jobs =
-		  remaining_jobs( \%job );    # How much pending stuff is there?
+			remaining_jobs( \%job );    # How much pending stuff is there?
 		INFO("Draining: $remaining_jobs remaining connections.");
 		INFO("Draining: $remaining_inputs remaining inputs");
 	}
 }
 update_counters( $counters, \%job, \%input, \@ondeck );
 write_stats( $counters, \%job, \%input, \@ondeck, $statusfile )
-  if defined $statusfile;
+	if defined $statusfile;
 
 check_inputs(@ondeck);
 
 INFO("Doing final flush");
 flush_output();
 close_all();
-LOG("DONE","All done");
-if (defined $done_file && scalar(@failed)==0){
-	open(DONE,">$done_file");
+LOG( "DONE", "All done" );
+if ( defined $done_file && scalar(@failed) == 0 ) {
+	open( DONE, ">$done_file" );
 	print DONE "done";
 	close DONE;
 }
@@ -201,18 +218,24 @@ sub catch_int {
 	}
 }
 
-sub close_all{
+sub close_all {
 	foreach my $file ( keys %output ) {
 		$output{$file}->{handle}->close()
-			 if defined $output{$file}->{handle};
+			if defined $output{$file}->{handle};
 	}
+}
+
+sub snapshottimeout {
+	my $clientaddr=shift;
+	cluck("timeout");
+	ERROR("timeout: $clientaddr");
 }
 
 sub do_request {
 	my $sock       = shift;
 	my $clientaddr = $sock->peerhost();
 
-	#  print "Connect from $clientaddr\n";
+	DEBUG("Connect from $clientaddr");
 
 	my $got_response = 0;
 	my $status       = 0;
@@ -221,14 +244,15 @@ sub do_request {
 	# Read from client.  Process requests and reponse.
 	#
 	while (<$sock>) {
-#		DEBUG("COMMAND: $_");
+
+		#		DEBUG("COMMAND: $_");
 		if (/^RESULTS /) {
 			my ( $command, $jstep ) = split;
 			chomp $jstep;
-			my $bytes    = 0;
-			my $success  = 1;
+			my $bytes   = 0;
+			my $success = 1;
 			my $nfiles;
-			map {delete $scratchbuffer{$_}} keys %scratchbuffer;
+			map             { delete $scratchbuffer{$_} } keys %scratchbuffer;
 			while (<$sock>) {
 				if (/^FILES /) {
 					( $command, $nfiles ) = split;
@@ -244,10 +268,10 @@ sub do_request {
 					$bytes += $readbytes;
 				}
 			}
-			if ($nfiles!=scalar(keys %scratchbuffer)){
-				my $nfilesr=scalar keys %scratchbuffer;
+			if ( $nfiles != scalar( keys %scratchbuffer ) ) {
+				my $nfilesr = scalar keys %scratchbuffer;
 				ERROR("Missing files ($nfiles vs $nfilesr) for $jstep");
-				$success=0;
+				$success = 0;
 			}
 			if ( $success && defined $job{$jstep} ) {
 				$job{$jstep}->{bytesout} = $bytes;
@@ -261,8 +285,7 @@ sub do_request {
 				requeue_job($jstep);
 			}
 			else {
-				ERROR(
-				  "Unexpected report from $clientaddr:$ident for $jstep");
+				ERROR("Unexpected report from $clientaddr:$ident for $jstep");
 				print $sock "RECEIVED $jstep\n";
 				$status = 0;
 			}
@@ -291,9 +314,9 @@ sub do_request {
 		elsif (/^HEARTBEAT /) {
 			chomp;
 			s/^HEARTBEAT //;
-			my @items=split;
-			my $jstep=shift @items;
-			update_job_stats($jstep,@items);
+			my @items = split;
+			my $jstep = shift @items;
+			update_job_stats( $jstep, @items );
 			DEBUG("Got Heartbeat for $jstep");
 		}
 		elsif (/^STATUS/) {
@@ -329,20 +352,20 @@ sub read_file {
 	my $bytes      = 0;
 	my $alert      = 0;
 	my ( $command, $file, $size ) = split;
-	$scratchbuffer{$file}="";
+	$scratchbuffer{$file} = "";
 	DEBUG("Reading $file size $size");
 	while (<$sock>) {
 		$bytes += length $_;
-		if (/DONE$/ && $bytes>$size){
-                  s/DONE\n//;
-		  $scratchbuffer{$file} .= $_;
-		  $bytes -= 5; # Subtract off the DONE marker
-		  last;
-                }
-		elsif ($bytes>$size && ! $alert ){
-		  INFO("Overrun: for $file: $_");
-		  INFO("Continue to read.");
-		  $alert=1;
+		if ( /DONE$/ && $bytes > $size ) {
+			s/DONE\n//;
+			$scratchbuffer{$file} .= $_;
+			$bytes -= 5;    # Subtract off the DONE marker
+			last;
+		}
+		elsif ( $bytes > $size && !$alert ) {
+			INFO("Overrun: for $file: $_");
+			INFO("Continue to read.");
+			$alert = 1;
 		}
 		$scratchbuffer{$file} .= $_;
 	}
@@ -366,11 +389,11 @@ sub process_results {
 
 	return 0 unless defined( $job{$jstep} );
 
-# Copy data from scratch buffer
-#
-	foreach my $file (keys %scratchbuffer){
+	# Copy data from scratch buffer
+	#
+	foreach my $file ( keys %scratchbuffer ) {
 		DEBUG("Copying $file to buffer");
-		$output{$file}->{buffer}.=$scratchbuffer{$file};
+		$output{$file}->{buffer} .= $scratchbuffer{$file};
 	}
 	my $inputs = join ",", @{ $job{$jstep}->{list} };
 	my $rtime = time - $job{$jstep}->{start};
@@ -378,11 +401,16 @@ sub process_results {
 	$job{$jstep}->{finish} = time;
 	$job{$jstep}->{ident}  = $ident;
 	$progress_buffer .= sprintf "%s %s %d %d %d %d\n", $inputs, $ident, $rtime,
-	  $job{$jstep}->{lines}, time, $job{$jstep}->{bytesin};
+		$job{$jstep}->{lines}, time, $job{$jstep}->{bytesin};
 	INFO(
-	  sprintf "Recv: %d input:%25s hostid:%-10s  time:%-4ds lines: %-6d proc: %d",
-	  $jstep, substr( $inputs, 0, 25 ), $ident, $rtime, $job{$jstep}->{lines},
-	  $processed);
+		sprintf "Recv: %d input:%25s hostid:%-10s  time:%-4ds lines: %-6d proc: %d",
+		$jstep,
+		substr( $inputs, 0, 25 ),
+		$ident,
+		$rtime,
+		$job{$jstep}->{lines},
+		$processed
+	);
 
 	foreach my $inputid ( @{ $job{$jstep}->{list} } ) {
 		$input{$inputid}->{status} = 'buffered';
@@ -416,14 +444,14 @@ sub send_work {
 
 		# Save info about the job step.
 		#
-		$job{$item}->{start}   = time;
-		$job{$item}->{finish}  = 0;
-		$job{$item}->{time}    = 0;
-		$job{$item}->{bytesin} = $length;
-		$job{$item}->{list}    = $sent;
-		$job{$item}->{count}   = $ct;
-		$job{$item}->{ident}   = $ident;
-		$job{$item}->{lastheartbeat}=time;
+		$job{$item}->{start}         = time;
+		$job{$item}->{finish}        = 0;
+		$job{$item}->{time}          = 0;
+		$job{$item}->{bytesin}       = $length;
+		$job{$item}->{list}          = $sent;
+		$job{$item}->{count}         = $ct;
+		$job{$item}->{ident}         = $ident;
+		$job{$item}->{lastheartbeat} = time;
 		INFO("Sent: $item hostid:$ident length:$length");
 		$item++;
 	}
@@ -440,36 +468,36 @@ sub send_work {
 sub flush_output {
 	DEBUG("Flush called");
 	foreach my $file ( keys %output ) {
-		my $bf=$output{$file}->{buffer};
+		my $bf = $output{$file}->{buffer};
 		if ( !defined $output{$file}->{handle} ) {
 			DEBUG("Opening new file $file");
-			if ($file eq "stdout"){
-				$output{$file}->{handle}=*stdout;
+			if ( $file eq "stdout" ) {
+				$output{$file}->{handle} = *stdout;
 			}
-			elsif ($file eq "stderr"){
-				$output{$file}->{handle}=*stderr;
+			elsif ( $file eq "stderr" ) {
+				$output{$file}->{handle} = *stderr;
 			}
-			else{
+			else {
 				$output{$file}->{handle} = new IO::File ">> $file";
 			}
 		}
 		my $handle = $output{$file}->{handle};
-		if (! defined $handle){
+		if ( !defined $handle ) {
 			ERROR("Unable to open file $file.  Exiting");
 			exit -1;
 		}
 		my $blength = length $output{$file}->{buffer};
-		if ($blength>0){
-			$output{$file}->{lastwrite}=time;
+		if ( $blength > 0 ) {
+			$output{$file}->{lastwrite} = time;
 			DEBUG("Flushed $blength bytes to $file");
 			print {$handle} $output{$file}->{buffer};
 			$handle->flush();
 		}
 		$output{$file}->{buffer} = '';
 	}
-	
-	map {$input{$_}->{status} = 'completed' } @buffered;
-	@buffered=();
+
+	map { $input{$_}->{status} = 'completed' } @buffered;
+	@buffered = ();
 	flush LOG;
 	print PROGRESS $progress_buffer;
 	flush PROGRESS;
@@ -528,17 +556,17 @@ sub check_timeouts {
 	DEBUG("Checking timeouts");
 	foreach my $jstep ( keys %job ) {
 		next if $job{$jstep}->{finish};
-		my $retry=0;
-		
-		$retry=1 if (time>($job{$jstep}->{lastheartbeat}+$heartbeatto));
-		$retry=1 if ( time>($job{$jstep}->{start} + $TIMEOUT) ) ;
-		if ($retry){
+		my $retry = 0;
+
+		$retry = 1 if ( time > ( $job{$jstep}->{lastheartbeat} + $heartbeatto ) );
+		$retry = 1 if ( time > ( $job{$jstep}->{start} + $TIMEOUT ) );
+		if ($retry) {
 			WARN("RETRY: $jstep timed out or missed heartbeat.  Adding to retry.");
 			requeue_job($jstep);
 			$counters->{timeouts}++;
 		}
 	}
-	$next_check = time + $polltime/2;
+	$next_check = time + $polltime / 2;
 }
 
 # Take inputs for job step
@@ -549,8 +577,8 @@ sub requeue_job {
 
 	foreach my $inputid ( @{ $job{$jstep}->{list} } ) {
 		$input{$inputid}->{retry}++;
-		DEBUG(sprintf "Retrying %s for %d time", $inputid,
-		  $input{$inputid}->{retry});
+		DEBUG( sprintf "Retrying %s for %d time",
+			$inputid, $input{$inputid}->{retry} );
 		if ( $input{$inputid}->{retry} < $MAXRETRY ) {
 			unshift @ondeck, $inputid;
 			$input{$inputid}->{status} = 'retry';
@@ -633,9 +661,9 @@ sub fast_recovery {
 sub check_inputs {
 	foreach my $inputid (@_) {
 		print stderr "Bad inputid: $inputid\n"
-		  if ( !defined $inputid || $inputid eq '^$' );
+			if ( !defined $inputid || $inputid eq '^$' );
 		die "Bad input in retry $inputid\n\n$input{$inputid}->{input}\n"
-		  unless $input{$inputid}->{input} =~ /^>/;
+			unless $input{$inputid}->{input} =~ /^>/;
 	}
 }
 
@@ -664,7 +692,7 @@ sub write_fastrecovery {
 	# Add failed jobs to the recovery list
 
 	push @recoverylist, @failed;
-	
+
 	# Add jobs that were buffered but didn't get flushed before
 	# the server quit.
 	push @recoverylist, @buffered;
@@ -707,10 +735,10 @@ sub initialize_counters {
 }
 
 sub update_job_stats {
-	my $jstep=shift;
-	
-	if (defined $job{$jstep}){
-		$job{$jstep}->{lastheartbeat}=time;
+	my $jstep = shift;
+
+	if ( defined $job{$jstep} ) {
+		$job{$jstep}->{lastheartbeat} = time;
 	}
 }
 
@@ -739,7 +767,7 @@ sub update_counters {
 
 			# time series counters
 			my $epoch =
-			  int( ( $job->{finish} - $c->{start_time} ) / ( $c->{quantum} ) );
+				int( ( $job->{finish} - $c->{start_time} ) / ( $c->{quantum} ) );
 			$c->{h_bytesin}->{$epoch}  += $job->{bytesin};
 			$c->{h_bytesout}->{$epoch} += $job->{bytesout};
 			$c->{h_count}->{$epoch}    += $job->{count};
@@ -783,8 +811,8 @@ sub write_stats {
 		my $job = $j->{$jid};
 		printf CF
 "{\"id\":%d,\"start\":%d,\"finish\":%d,\"bytesin\":%d,\"bytesout\":%d,\"ident\":\"%s\"}",
-		  $jid, $job->{start}, $job->{finish}, $job->{bytesin},
-		  $job->{bytesout}, $job->{ident};
+			$jid, $job->{start}, $job->{finish}, $job->{bytesin}, $job->{bytesout},
+			$job->{ident};
 	}
 	print CF "],\n";
 
@@ -796,8 +824,8 @@ sub write_stats {
 		print CF ",\n" if $ct;
 		$ct++;
 		printf CF "{\"id\":\"%s\",\"header\":\"%s\",\"status\":\"%s\"}", $id,
-		  $in->{header}, $in->{status}
-		  if $output;
+			$in->{header}, $in->{status}
+			if $output;
 	}
 	print CF "],\n";
 	print CF "\"counters\":{";
@@ -842,24 +870,26 @@ sub delete_olddata {
 	}
 }
 
-sub DEBUG{
-	LOG("DEBUG",shift) if $debuglevel>3;
+sub DEBUG {
+	LOG( "DEBUG", shift ) if $debuglevel > 3;
 }
 
-sub INFO{
-	LOG("INFO",shift) if $debuglevel>2;
-}
-sub WARN{
-	LOG("WARN",shift) if $debuglevel>1;
-	
-}
-sub ERROR{
-	LOG("ERROR",shift) if $debuglevel>0;	
+sub INFO {
+	LOG( "INFO", shift ) if $debuglevel > 2;
 }
 
-sub LOG{
-	my $level=shift;
-	my $message=shift;
+sub WARN {
+	LOG( "WARN", shift ) if $debuglevel > 1;
+
+}
+
+sub ERROR {
+	LOG( "ERROR", shift ) if $debuglevel > 0;
+}
+
+sub LOG {
+	my $level   = shift;
+	my $message = shift;
 	print LOG "$level: $message\n";
 }
 

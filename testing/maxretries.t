@@ -8,19 +8,17 @@ if [ $# -eq 0 ] ; then
   setup
   cleanup
 
-  echo "Starting server"
   export LOOP=1
   $TF_HOME/bin/tfrun --tfbatchsize=16 --tfdebuglevel=3 -i $TFILE $ME arg1  > test.out 2> test.err
-  [ $(wc -l fastrecovery.$TFILE|awk '{print $1}') -gt 1 ] && echo "Failed tasks as expected"
-  echo "Launching second try"
+  [ $(wc -l fastrecovery.$TFILE|awk '{print $1}') -gt 1 ] || error "No failed tasks as expected"
   LOOP=2
   $TF_HOME/bin/tfrun --tfbatchsize=16 --tfdebuglevel=3 -i $TFILE $ME arg1  > test.out 2> test.err
 
 # Everything has ran.  Now let us see how it did
-  echo "Checking Results"
   PLINES=$( cat progress.$TFILE |sed 's/,/\n/g'|wc -l)
   ELINES=$( grep -c '^>' $TFILE)
-  [ $PLINES -eq $ELINES ] || echo "Didn't process all lines $PLINES vs $ELINES"
+  [ $PLINES -eq $ELINES ] || error "Didn't process all lines $PLINES vs $ELINES"
+  okay
 else
   OUT=$(wc)
 
