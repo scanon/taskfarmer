@@ -1,0 +1,24 @@
+#!/usr/bin/perl
+#use strict;
+use File::Basename;
+
+#my $START=15845583037;
+
+my $IFILE=$ARGV[0];
+my $CHUNKSIZE=$ARGV[1];
+my $SPLIT=$ARGV[2];
+
+my $OFF=$SPLIT*$CHUNKSIZE;
+my  $bytesRead;
+
+open(INPUT,$IFILE) or die "Unable to open $IFILE\n";
+if ($OFF>0){
+  seek INPUT, $OFF-1, SEEK_SET or die "Unable to seek to $OFF\n";
+  $_=<INPUT>;
+}
+while(<INPUT>){
+  print $_;
+       
+  last if $bytesRead > $CHUNKSIZE;
+  $bytesRead+=length;
+}

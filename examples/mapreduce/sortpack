@@ -1,0 +1,72 @@
+#!/bin/sh
+#
+#
+#PBS -l walltime=01:00:00
+#PBS -q regular
+#PBS -V
+
+#which tfrun > /dev/null 2>&1
+#if [ $(which tfrun) ] ; then
+#  echo "Unable to find task farmer."
+#  exit
+#fi
+
+#
+# Submit a Job
+if [ -z "$PBS_JOBID" ] ; then
+  [ -z "$CORES" ] && export CORES=240
+  if [ $# -lt 3 ] ; then
+    echo "Usage: $0 <INPUT DIR> <NAME> <OUTPUT DIR>"
+    exit
+  fi
+
+# Figure out where this is and add it to the path
+  export SDIR=$(dirname $0)
+  export ME=$(basename $0)
+  if [ "$SDIR"="." ] ; then
+    B=$(which $0)
+    SDIR=$(dirname $B)
+  fi
+  export PATH=$PATH:$SDIR
+
+  echo "Submitting a job with $CORES cores"
+  export IDIR=$1
+  export NAME=$2
+  export OUT=$3
+  (echo $IDIR|grep -c '^/' > /dev/null) || IDIR="$(pwd)/$IDIR"
+  (echo $OUT|grep -c '^/' > /dev/null) || OUT="$(pwd)/$OUT"
+  echo "Sortint and pack $IDIR $NAME into $OUT"
+  qsub -N SORTPACK-$NAME -l mppwidth=$CORES $SDIR/$ME
+  exit
+fi
+
+cd $PBS_O_WORKDIR
+export THREADS=6
+export BATCHSIZE=1
+export TIMEOUT=3600
+[ -z $MAP ] && export MAP=map
+
+if [ $# -eq 0 ] ; then
+# Generate the input
+  LIST=$PBS_JOBID.in
+  export PBS_JOBID
+
+  find $IDIR -maxdepth 1 -type d|tail +2|grep -v zip|awk '{print "> "$0}' > $LIST
+  tfrun -i $LIST $SDIR/$ME $NAME $OUT
+  rm $LIST *.$LIST
+else
+  DIR=$(cat /dev/stdin|sed 's/> //')
+  MEM=2G
+  NAME=$1
+
+  HASH=$(echo $DIR|sed 's/.*\///')
+  echo $HASH
+  ZIP=$OUT/$NAME.$HASH.zip
+  if [ -s $ZIP ] ; then
+     echo "Skipping $NAME $HASH $ZIP"
+  else
+    echo "Processing $NAME $HASH $ZIP"
+    rm $ZIP
+    sort -u -T $SCRATCH -S $MEM $DIR/$NAME.*|pack $ZIP
+  fi
+fi

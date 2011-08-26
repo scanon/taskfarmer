@@ -1,0 +1,7 @@
+#!/usr/bin/perl
+
+
+while(<>){
+  $key=substr $_,0,4;
+  print "$key $_";
+}
