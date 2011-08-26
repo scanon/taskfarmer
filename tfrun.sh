@@ -54,6 +54,10 @@ if [ -z $TF_ADDR ] && [ -z $TF_PORT ] && [ $# -gt 0 ] ; then
     sleep 1
   done
   TF_PORT=$(cat $SOCKFILE)
+  if [ -z $TF_PORT ] ; then
+    echo "No port defined.  Report this."
+    exit
+  fi
   if [ ! -z $TF_SERVERS ] ; then
     echo "$TF_ADDR:$TF_PORT:$PID:$(pwd):$@" >> $TF_SERVERS
   fi
@@ -82,11 +86,11 @@ fi
 
 # Kill the server (just in case)
 if [ -z $EXTERNAL_SERVER ] ; then
+  sleep 1
   if [ ! -z $PID ] ; then
     [ -d /proc/$PID ]  && kill -INT $PID > /dev/null 2>&1
     [ -d /proc/$PID ]  && kill -INT $PID > /dev/null 2>&1
     [ -d /proc/$PID ]  && kill $PID > /dev/null 2>&1
-    rm $PIDFILE
   fi
   [ -e $SOCKFILE ] && rm $SOCKFILE
 fi
