@@ -6,8 +6,8 @@ export TF_HOME=/tmp/tf.$$
 . functions.t
 
 for t in $(ls *.t|grep -v functions.t) ; do
-  echo "Running $t"
-  ./$t
+  echo "Running $t: "
+  [ -e ./$t ] && ./$t
   echo ""
 done
 

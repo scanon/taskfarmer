@@ -50,7 +50,7 @@ if [ -z $TF_ADDR ] && [ -z $TF_PORT ] && [ $# -gt 0 ] ; then
 #
 # Wait for the socket file to exist.
 #
-  while [ ! -e $SOCKFILE ] ; do
+  while [ -d "/proc/$PID" ] && [ ! -e $SOCKFILE ] ; do
     sleep 1
   done
   TF_PORT=$(cat $SOCKFILE)

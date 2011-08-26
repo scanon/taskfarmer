@@ -12,12 +12,11 @@ if [ $# -eq 0 ] ; then
   $TF_HOME/bin/tfrun --tfdebuglevel=3 -i $TFILE $ME arg1 > test.out 2> test.err
 
 # Everything has ran.  Now let us see how it did
-  echo "Checking Results"
   grep bogus test.out
   PLINES=$( cat progress.$TFILE |sed 's/,/\n/g'|wc -l)
   ELINES=$( grep -c '^>' $TFILE)
-  [ $PLINES -eq $ELINES ] || echo "Didn't process all lines $PLINES vs $ELINES"
-
+  [ $PLINES -eq $ELINES ] || error "Didn't process all lines $PLINES vs $ELINES"
+  okay
 # Cleanup
 else
 

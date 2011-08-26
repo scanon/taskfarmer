@@ -9,16 +9,13 @@ if [ $# -eq 0 ] ; then
   cleanup
   export PIDFILE=`pwd`/tf.pid
 
-#  export DEBUGDIR=`pwd`/debug
-#  mkdir $DEBUGDIR
   $TF_HOME/bin/tfrun --tfpidfile $PIDFILE -i $TFILE $ME arg1 > test.out 2> test.err
 
 # Everything has ran.  Now let us see how it did
-  echo "Checking Results"
   PLINES=$( cat progress.$TFILE |sed 's/,/\n/g'|wc -l)
   ELINES=$( grep -c '^>' $TFILE)
-  [ $PLINES -eq $ELINES ] || echo "Didn't process all lines $PLINES vs $ELINES"
-
+  [ $PLINES -eq $ELINES ] || error "Didn't process all lines $PLINES vs $ELINES"
+  okay
 # Cleanup
 else
 

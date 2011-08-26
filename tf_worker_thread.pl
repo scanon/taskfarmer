@@ -33,6 +33,7 @@ my $SLEEP=20;
 my $heartbeattime=300;
 my $polltime=0.5;
 my $TESTING=1 if (defined $ENV{TF_TESTING});
+$DEBUG=1 if (defined $ENV{DEBUGTF});
 
 # This is our work area
 #
@@ -44,6 +45,7 @@ my $IGNORE_RETURN=1 if defined $ENV{IGNORE_RETURN};
 
 $polltime=$ENV{TF_POLLTIME} if defined $ENV{TF_POLLTIME};
 $heartbeattime=$ENV{TF_HEARTBEAT} if defined $ENV{TF_HEARTBEAT};
+$TIMEOUT=$ENV{TF_TIMEOUT} if defined $ENV{TF_TIMEOUT};
 
 # Get our ID
 my $ID="unknown";
@@ -66,6 +68,9 @@ my $app=shift @args;
 
 my $step=-1;
 my $status=0;
+
+# TODO Rework this loop a bit.  Add an alarm to reset things. Check for sleep though.
+#
 while ( ($step=send_and_get($SERVER,$PORT,$step,$status)) >= 0 ){
 # Run the users code
   $ENV{STEP}=$step;
@@ -100,6 +105,7 @@ sub catfiles {
     $size++ if induce_errors("size");
     next if induce_errors("skip");
     return if induce_errors("drop");
+    sleep 30 if induce_errors("hang");
     print $sock "FILE $file $size\n";
     open(F,"$file");
     while(<F>){
@@ -123,6 +129,7 @@ sub induce_errors{
 	return 1 if ($type eq 'skip' && -e "skipfile");
 	return 1 if ($type eq 'drop' && -e "drop");
 	return 1 if ($type eq 'size' && -e "testreaderror");
+	return 1 if ($type eq 'hang' && -e "testhang");
     return 0;
 }
 # Read the args from the server
@@ -158,9 +165,11 @@ sub connect_server {
 
   while ($retry<$MAX_RETRIES){  
     $sock = IO::Socket::INET->new(PeerAddr => $server, PeerPort => $port,
-	Timeout => 45,
+	Timeout => $TIMEOUT,
 	Proto    => 'tcp');
     return $sock if defined $sock;
+    die "$!: $server:$port\n" if $!=~/refused/;
+    print STDERR "Socket: $!\n";
     sleep rand($retry*$SLEEP);
     $retry++;
     print STDERR "$ID: Retrying connection to $server on $port ($retry)\n" if ($retry<$MAX_RETRIES);

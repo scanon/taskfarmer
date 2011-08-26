@@ -8,13 +8,12 @@ if [ $# -eq 0 ] ; then
   setup
   export ARG_OUT=`pwd`/test.args
 
-  echo "Starting server"
   $TF_HOME/bin/tfrun -i $TFILE $ME arg1 arg2 'a b' > test.out 2> test.err
 
 # Everything has ran.  Now let us see how it did
-  echo "Checking Results"
-  [ $(cat $ARG_OUT|wc -l) -eq 3 ] || echo "Error: incorrect number of args"
-  [ $(grep -c 'a b' $ARG_OUT) -eq 1 ] || echo "Error: didn't read arg with space"
+  [ $(cat $ARG_OUT|wc -l) -eq 3 ] || error "Error: incorrect number of args"
+  [ $(grep -c 'a b' $ARG_OUT) -eq 1 ] || error "Error: didn't read arg with space"
+  okay
 else
   OUT=$(wc)
 
