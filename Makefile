@@ -21,6 +21,7 @@ install:
 	install -d $(SHAREDIR)
 	install -d $(EXAMPLESDIR)
 	install tfrun.sh $(BINDIR)/tfrun
+	install runcommands.sh $(BINDIR)/runcommands.sh
 	install tf_server.pl $(LIBEXECDIR)/tf_server
 	install tf_worker_thread.pl $(LIBEXECDIR)/tf_worker_thread
 	install tf_worker $(LIBEXECDIR)/tf_worker

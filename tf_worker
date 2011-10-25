@@ -7,6 +7,11 @@
 SERVER=$1
 PORT=$2
 
+if [ ! -z $SKEW ] ; then
+  let skew=RANDOM%SKEW
+  sleep $skew
+fi
+
 export TF_TMPDIR=/tmp/$USER-$$
 
 # Source any setup files that are needed for the system.
@@ -16,11 +21,22 @@ if [ -x $TF_CONFDIR/$NERSC_HOST.stage ] ; then
   . $TF_CONFDIR/$NERSC_HOST.stage
 fi
 
+if [ ! -z $TF_SERVERS ] ; then
+  if [ $(echo $TF_SERVERS | grep -c '^/' ) -eq 0 ] ; then
+    TF_SERVERS=`pwd`/servers
+  fi
+fi
+
 mkdir -p $TF_TMPDIR
 cd $TF_TMPDIR
 
 # Source the staging file specified by the user if there is one.
 #
+if [ ! -z $STAGE ] && [ ! -x "$STAGE" ] ; then
+  echo "Error sourcing $STAGE"
+  exit
+fi
+
 if [ ! -z $STAGE ] && [ -x "$STAGE" ] ; then
   . $STAGE
 fi

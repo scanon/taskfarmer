@@ -276,7 +276,7 @@ sub run_application{
 
   my $pid=fork();
   if ($pid>0){
-  	my $lasthb=0;
+	my $lasthb=time();
   	while (waitpid($pid,WNOHANG)==0){
   		if (time>($lasthb+$heartbeattime)){
   			heartbeat($server,$port,$step);
