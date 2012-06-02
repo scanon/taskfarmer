@@ -38,7 +38,7 @@ if [ -z $TF_ADDR ] && [ -z $TF_PORT ] && [ $# -gt 0 ] ; then
 # Start the server and record the PID
 #
   if [ $(basename $0) = "tfrun" ] ; then
-    $TF_HOME/libexec/taskfarmer/tf_server "$@" &
+    $TF_HOME/bin/tf_server.pl "$@" &
   else
     base=$(basename $0|sed 's/tf$//')
     APP=$(which $base 2>/dev/null) || (echo "Unable to find $base")

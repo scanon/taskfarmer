@@ -70,7 +70,7 @@ trap cleanup 2 15
 launch_threads() {
   for THREAD in $(seq $THREADS) ; do
     export ID="$BID-$THREAD"
-    perl $TF_HOME/libexec/taskfarmer/tf_worker_thread $SERVER $PORT $THREAD &
+    perl $TF_HOME/bin/tf_worker_thread.pl $SERVER $PORT $THREAD &
     PIDS="$PIDS $!"
   done
   # Wait for all threads to exit before cleanup

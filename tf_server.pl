@@ -1,152 +1,120 @@
 #!/usr/bin/env perl
 
 # TODO Close files that aren't accessed for a while
-
+use threads;
+use threads::shared;
 use Socket;
 use IO::Handle;
 use IO::File;
 use IO::Socket::INET;
 use strict;
 use Getopt::Long;
+use NERSC::TaskFarmer::Jobs;
+use NERSC::TaskFarmer::CPR;
+use NERSC::TaskFarmer::Stats;
+use NERSC::TaskFarmer::Log;
 use Carp qw(cluck);
 
-my $input;
+my $config = initialize_conf();
 
-# Parameters
-#
-my $BATCHSIZE      = 32;
-my $batchbytes     = 0;
-my $TIMEOUT        = 1800;
-my $TIMEOUT_SOCKET = 10;
-my $heartbeatto    = 600;
-my $MAXRETRY       = 8;
-my $MAXBUFF        = 100 * 1024 * 1024;    # 100M buffer
-my $FLUSHTIME      = 20;                   # write
-my $WINDOWTIME     = 60 * 10;              # 10 minutes
-my $polltime       = 600;
-my $closetime      = 600;
-my $reqtimeout     = 10;
-my $FR_FILE;
-my $port;
-my $sockfile;
-my $pidfile;
-my $debuglevel = 1;
-
-# Override defaults
-$BATCHSIZE      = $ENV{BATCHSIZE}      if defined $ENV{BATCHSIZE};
-$batchbytes     = $ENV{BATCHBYTES}     if defined $ENV{BATCHBYTES};
-$TIMEOUT        = $ENV{SERVER_TIMEOUT} if defined $ENV{SERVER_TIMEOUT};
-$TIMEOUT_SOCKET = $ENV{SOCKET_TIMEOUT} if defined $ENV{SOCKET_TIMEOUT};
-$port           = $ENV{PORT}           if defined $ENV{PORT};
-$sockfile       = $ENV{SOCKFILE}       if defined $ENV{SOCKFILE};
-my $statusfile = $ENV{STATUSFILE};
-
-Getopt::Long::Configure("pass_through");
-my $result = GetOptions( "i=s"             => \$input );
-my $result = GetOptions( "tfbatchsize=i"   => \$BATCHSIZE );
-my $result = GetOptions( "tfbatchbytes=i"  => \$batchbytes );
-my $result = GetOptions( "tftimeout=i"     => \$TIMEOUT );
-my $result = GetOptions( "tfsocktimeout=i" => \$TIMEOUT_SOCKET );
-my $result = GetOptions( "tfsockfile=s"    => \$sockfile );
-my $result = GetOptions( "tfstatusfile=s"  => \$statusfile );
-my $result = GetOptions( "tfpidfile=s"     => \$pidfile );
-my $result = GetOptions( "tfdebuglevel=i"  => \$debuglevel );
-my $result = GetOptions( "tfheartbeat=i"   => \$heartbeatto );
-
-die "No input file specified\n" unless defined $input;
-
-my $inputfile = $input;
-$inputfile =~ s/.*\///;
-$FR_FILE = "fastrecovery." . $inputfile;
-my $done_file = "done." . $inputfile;
+die "No input file specified\n" unless defined $config->{INPUT};
 
 #  Global vars
 #
 my $progress_buffer = '';
+
+# shared
 my %input;
 my %output;
 my %scratchbuffer;
-my %job;
+
+#my %job;
+
+# These become thread queues
 my @ondeck;
-my @failed;
+
+#my @failed;
 my @buffered;
-my $item;
-my $offset;
-my $index;
-$polltime = $TIMEOUT;
-$polltime = $heartbeatto if ( $TIMEOUT > $heartbeatto );
-my $next_flush  = time + $FLUSHTIME;
-my $next_status = time + $FLUSHTIME;
-my $next_check  = time + $polltime;
+
+initialize_jobs( \%input, $config, \@buffered, \@ondeck );
+
+# Not sure...
+#my $item;
+#my $offset;
+my $index      = 0;
+my $next_flush = time + $config->{FLUSHTIME};
+
 my $processed   = 0;
 my $buffer_size = 0;
-my $chunksize   = 2 * $BATCHSIZE;
+my $chunksize   = 2 * $config->{BATCHSIZE};
 my $shutdown    = 0;
 
-my $inputf = new IO::File $input or die "Unable to open input file ($input)\n";
+my $inputf = new IO::File $config->{INPUT}
+	or die "Unable to open input file ($config->{INPUT})\n";
 
 # Check the age of the recovery file
 #
-if (!check_recovery_age($FR_FILE,$FLUSHTIME)){
-  print stderr "Fast Recovery it too new.\n";
-  print stderr "Check that another server isn't running and retry in $FLUSHTIME seconds\n";
-  exit 1;
+if ( !check_recovery_age($config) ) {
+	print stderr "Fast Recovery it too new.\n";
+	print stderr
+"Check that another server isn't running and retry in $config->{FLUSHTIME} seconds\n";
+	exit 1;
 }
-fast_recovery($FR_FILE);
+read_fastrecovery( $config->{FR_FILE}, $inputf, $index, \%input );
 
 # make the socket
 my %sockargs = (
 	Proto   => 'tcp',
-	Timeout => $TIMEOUT_SOCKET,
+	Timeout => $config->{SOCKET_TIMEOUT},
 	Listen  => 1000,
 	Reuse   => 1
 );
 
-$sockargs{LocalPort} = $port if defined $port;
+$sockargs{LocalPort} = $config->{port} if defined $config->{port};
 
 my $sock = new IO::Socket::INET->new(%sockargs)
 	or die "Unable to create socket\n";
 
-if ( defined $sockfile ) {
-	open( SF, "> $sockfile" ) or die "Unable to open socket file\n";
-	print SF $sock->sockport() . "\n";
-	close SF;
+if ( defined $config->{SOCKFILE} ) {
+	writeline($config->{SOCKFILE},$sock->sockport()."\n");
 }
 
-if ( defined $pidfile ) {
-	open( PF, "> $pidfile" ) or die "Unable to open pid file\n";
-	print PF $$ . "\n";
-	close PF;
+if ( defined $config->{PIDFILE} ) {
+	writeline($config->{PIDFILE},$$."\n");
 }
 
-my $item             = 0;
 my $remaining_jobs   = 1;
 my $remaining_inputs = 1;
 my $ident;
 my $command;
-my $counters;
 
-initialize_counters( $counters, $WINDOWTIME );
 my @stati = stat $inputf;
-$counters->{size}       = $stati[7];
-$counters->{quantum}    = $WINDOWTIME;
-$counters->{start_time} = time;
+initialize_counters( $config->{STATUSFILE}, $config->{WINDOWTIME}, $stati[7] );
+#$counters->{size}       = $stati[7];
+#$counters->{quantum}    = $config->{WINDOWTIME};
+#$counters->{start_time} = time;
 
-open( PROGRESS, ">> ./progress.$inputfile" );
-open( LOG,      ">> ./log.$inputfile" );
+open( PROGRESS, ">> $config->{PROGRESSFILE}" );
+setlog( $config->{LOGFILE}, $config->{debuglevel} );
+
+#open( LOG,      ">> $config->{LOGFILE}" );
+
+#my $log = new IO::File "log.$inputfile" or die "Unable to open input file (log.$inputfile)\n";
 select LOG;
 $| = 1;
 select STDOUT;
+
 # Catch sigint and do a drain.
 #
 $SIG{INT} = \&catch_int;
 
 # This is so we can get a backtrace in cases where things get wedged.
 #
-$SIG{'USR2'} = sub { 
+$SIG{'USR2'} = sub {
 	ERROR("Caught SIGUSR2.  Dumping backtrace and exiting.");
-    Carp::confess("Dumping backtrace.");
+	Carp::confess("Dumping backtrace.");
 };
+
 # This is the main work loop.
 while ( $remaining_jobs || $remaining_inputs ) {
 	my $new_sock = $sock->accept();
@@ -154,51 +122,42 @@ while ( $remaining_jobs || $remaining_inputs ) {
 		my $clientaddr = $new_sock->peerhost();
 		eval {
 			local $SIG{ALRM} =
-				sub { snapshottimeout($clientaddr); die "alarm\n" }; # NB: \n required
-			# Let's give the request handler a fixed amount of time.  Just in case something
-			# gets dropped in the middle.
-			alarm $reqtimeout;
+				sub { snapshottimeout($clientaddr); die "alarm\n" };   # NB: \n required
+			   # Let's give the request handler a fixed amount of time.  Just in case something
+			   # gets dropped in the middle.
+			alarm $config->{REQUEST_TIMEOUT};
 			my $status = do_request($new_sock);
 			alarm 0;
 		};
 		close $new_sock;
 	}
-	check_timeouts() if ( time > $next_check );
-	flush_output() if ( time > $next_flush || $buffer_size > $MAXBUFF );
-	if ( time > $next_status ) {
-		update_counters( $counters, \%job, \%input, \@ondeck );
-		write_stats( $counters, \%job, \%input, \@ondeck, $statusfile )
-			if defined $statusfile;
-		delete_olddata( \%job, \%input );
-		$next_status = time + $FLUSHTIME;
-	}
+	check_timeouts();
+	flush_output()
+		if ( time > $next_flush || $buffer_size > $config->{MAXBUFF} );
 
-	$remaining_inputs = ( scalar @ondeck );
+	$remaining_inputs = remaining_inputs();
 	if ( eof($inputf) || $shutdown ) {
-		$shutdown       = 1;    # In case eof got us here.
-		$remaining_jobs =
-			remaining_jobs( \%job );    # How much pending stuff is there?
+		$shutdown       = 1;                   # In case eof got us here.
+		$remaining_jobs = remaining_jobs();    # How much pending stuff is there?
 		INFO("Draining: $remaining_jobs remaining connections.");
 		INFO("Draining: $remaining_inputs remaining inputs");
 	}
 }
-update_counters( $counters, \%job, \%input, \@ondeck );
-write_stats( $counters, \%job, \%input, \@ondeck, $statusfile )
-	if defined $statusfile;
+finalize_jobs();
 
-check_inputs(@ondeck);
+#update_counters( $counters, \%job, \%input, \@ondeck );
+#write_stats( $counters, \%job, \%input, \@ondeck, $config->{STATUSFILE} )
+#	if defined $config->{STATUSFILE};
 
 INFO("Doing final flush");
 flush_output();
 close_all();
-LOG( "DONE", "All done" );
-if ( defined $done_file && scalar(@failed) == 0 ) {
-	open( DONE, ">$done_file" );
-	print DONE "done";
-	close DONE;
+INFO("All done");
+if ( defined $config->{DONEFILE} && failed_jobs() == 0 ) {
+	writeline($config->{DONEFILE},"done")
 }
 close PRROGRESS;
-close LOG;
+closelog();
 
 # Interrupt handler
 #
@@ -218,11 +177,63 @@ sub catch_int {
 	else {
 		$shutdown = 2;
 		flush_output();
-		$remaining_jobs = remaining_jobs( \%job );
+		$remaining_jobs = remaining_jobs();
 		ERROR("Shutting down on signal $signame");
 		ERROR("Draining: $remaining_jobs remaining connections");
 		$shutdown = 1;
 	}
+}
+
+#
+# Initialize parameters
+#
+sub initialize_conf {
+	my $config = {
+		BATCHSIZE       => 32,
+		BATCHBYTES      => 0,
+		TIMEOUT         => 1800,
+		SOCKET_TIMEOUT  => 10,
+		heartbeatto     => 600,
+		MAXRETRY        => 8,
+		MAXBUFF         => 100 * 1024 * 1024,    # 100M buffer
+		FLUSHTIME       => 20,                   # write
+		WINDOWTIME      => 60 * 10,              # 10 minutes
+		POLLTIME        => 600,
+		closetime       => 600,
+		REQUEST_TIMEOUT => 10,
+		debuglevel      => 1,
+	};
+	my $result;
+
+	# Override defaults
+	for my $param qw(BATCHSIZE BATCHBYTES SOCKET_TIMEOUT PORT SOCKFILE) {
+		$config->{$param} = $ENV{$param} if defined $ENV{$param};
+	}
+
+	$config->{TIMEOUT} = $ENV{SERVER_TIMEOUT} if defined $ENV{SERVER_TIMEOUT};
+	Getopt::Long::Configure("pass_through");
+	$result = GetOptions( "i=s"             => \$config->{INPUT} );
+	$result = GetOptions( "tfbatchsize=i"   => \$config->{BATCHSIZE} );
+	$result = GetOptions( "tfbatchbytes=i"  => \$config->{BATCHBYTES} );
+	$result = GetOptions( "tftimeout=i"     => \$config->{TIMEOUT} );
+	$result = GetOptions( "tfsocktimeout=i" => \$config->{SOCKET_TIMEOUT} );
+	$result = GetOptions( "tfsockfile=s"    => \$config->{SOCKFILE} );
+	$result = GetOptions( "tfstatusfile=s"  => \$config->{STATUSFILE} );
+	$result = GetOptions( "tfpidfile=s"     => \$config->{PIDFILE} );
+	$result = GetOptions( "tfdebuglevel=i"  => \$config->{debuglevel} );
+	$result = GetOptions( "tfheartbeat=i"   => \$config->{heartbeatto} );
+
+	# Calculated values
+	$config->{POLLTIME} = $config->{TIMEOUT};
+	$config->{POLLTIME} = $config->{heartbeatto}
+		if ( $config->{TIMEOUT} > $config->{heartbeatto} );
+	my $inputfile = $config->{INPUT};
+	$inputfile =~ s/.*\///;
+	$config->{FR_FILE}      = "fastrecovery." . $inputfile;
+	$config->{DONEFILE}     = "done." . $inputfile;
+	$config->{PROGRESSFILE} = "./progress." . $inputfile;
+	$config->{LOGFILE}      = "./log." . $inputfile;
+	return $config;
 }
 
 sub close_all {
@@ -233,9 +244,15 @@ sub close_all {
 }
 
 sub snapshottimeout {
-	my $clientaddr=shift;
+	my $clientaddr = shift;
 	cluck("timeout");
 	ERROR("timeout: $clientaddr");
+}
+
+sub writeline {
+	my $filename = shift;
+	my $line = shift;
+	
 }
 
 sub do_request {
@@ -280,15 +297,16 @@ sub do_request {
 				ERROR("Missing files ($nfiles vs $nfilesr) for $jstep");
 				$success = 0;
 			}
-			if ( $success && defined $job{$jstep} ) {
-				$job{$jstep}->{bytesout} = $bytes;
+			if ($success) {
+
+				# Queue process job && defined $job{$jstep}
 				print $sock "RECEIVED $jstep\n";
 				my $status = process_results($jstep);
 			}
-			elsif ( !$success && defined $job{$jstep} ) {
+			elsif ( !$success && isajob($jstep) ) {
 				ERROR("Job step $jstep");
 				print $sock "RECEIVED $jstep\n";
-				$counters->{errors}++;
+				increment_error();
 				requeue_job($jstep);
 			}
 			else {
@@ -304,7 +322,7 @@ sub do_request {
 			if ( $shutdown && !$remaining_inputs ) {
 				print $sock "SHUTDOWN\n";
 			}
-			send_work($sock);
+			print $sock send_work($ident);
 			last;
 		}
 		elsif (/^ARGS$/) {
@@ -338,7 +356,7 @@ sub do_request {
 			my ( $command, $jstep ) = split;
 			ERROR("Job step $jstep");
 			print $sock "RECEIVED $jstep\n";
-			$counters->{errors}++;
+			increment_error();
 			requeue_job($jstep);
 		}
 		else {
@@ -386,89 +404,6 @@ sub read_file {
 	}
 }
 
-# Process results from client.
-# Add line to progress buffer.
-# Cleanup data structures.
-# (This doesn't actually spool the output)
-#
-sub process_results {
-	my $jstep = shift;
-
-	return 0 unless defined( $job{$jstep} );
-
-	# Copy data from scratch buffer
-	#
-	foreach my $file ( keys %scratchbuffer ) {
-		DEBUG("Copying $file to buffer");
-		$output{$file}->{buffer} .= $scratchbuffer{$file};
-	}
-	my $inputs = join ",", @{ $job{$jstep}->{list} };
-	my $rtime = time - $job{$jstep}->{start};
-	$job{$jstep}->{time}   = $rtime;
-	$job{$jstep}->{finish} = time;
-	$job{$jstep}->{ident}  = $ident;
-	$progress_buffer .= sprintf "%s %s %d %d %d %d\n", $inputs, $ident, $rtime,
-		$job{$jstep}->{lines}, time, $job{$jstep}->{bytesin};
-	INFO(
-		sprintf "Recv: %d input:%25s hostid:%-10s  time:%-4ds lines: %-6d proc: %d",
-		$jstep,
-		substr( $inputs, 0, 25 ),
-		$ident,
-		$rtime,
-		$job{$jstep}->{lines},
-		$processed
-	);
-
-	foreach my $inputid ( @{ $job{$jstep}->{list} } ) {
-		$input{$inputid}->{status} = 'buffered';
-		push @buffered, $inputid;
-	}
-	$processed += $job{$jstep}->{count};
-
-	#    delete $job{$jstep};
-	return 1;
-}
-
-sub send_work {
-	my $new_sock = shift;
-
-	my $sent = [];
-	my $length;
-	my $ct   = 0;
-	my @list = build_list( $BATCHSIZE, $batchbytes );
-
-	# Send the list if there is one.
-	#
-	if ( scalar @list > 0 ) {
-		print $new_sock "STEP: $item\n";
-		foreach my $inputid (@list) {
-			print $new_sock $input{$inputid}->{input};
-			$input{$inputid}->{status} = 'in progress';
-			push @{$sent}, $inputid;
-			$length += length $input{$inputid}->{input};
-			$ct++;
-		}
-
-		# Save info about the job step.
-		#
-		$job{$item}->{start}         = time;
-		$job{$item}->{finish}        = 0;
-		$job{$item}->{time}          = 0;
-		$job{$item}->{bytesin}       = $length;
-		$job{$item}->{list}          = $sent;
-		$job{$item}->{count}         = $ct;
-		$job{$item}->{ident}         = $ident;
-		$job{$item}->{lastheartbeat} = time;
-		INFO("Sent: $item hostid:$ident length:$length");
-		$item++;
-	}
-	else {
-
-		# If no work then send a shutdown
-		print $new_sock "SHUTDOWN";
-	}
-}
-
 # Flush output, progress, and create fast_recovery file
 # This tries to keep everything in a consistent state.
 #
@@ -511,9 +446,9 @@ sub flush_output {
 	$progress_buffer = '';
 	$buffer_size     = 0;
 
-	my $ct = write_fastrecovery($FR_FILE);
+	my $ct = write_fastrecovery( $config->{FR_FILE}, $inputf, $index, \%input );
 	DEBUG("Wrote fast recovery ($ct items)");
-	$next_flush = time + $FLUSHTIME;
+	$next_flush = time + $config->{FLUSHTIME};
 }
 
 #
@@ -531,389 +466,18 @@ sub build_list {
 	# Build rest from ondeck
 	#
 	if ( scalar @ondeck < ( $batchsize - $ct ) ) {
-		@tlist = read_input( $inputf, $chunksize );
+		@tlist = NERSC::TaskFarmer::Reader::read_input( $inputf, $chunksize );
 		$index += scalar @tlist;
 		push @ondeck, @tlist;
 	}
 	while ( $ct < $batchsize && scalar @ondeck > 0 ) {
 		my $id = shift @ondeck;
 		push @list, $id;
-		$bytes += length( $input{$id}->{input} );
+		$bytes += length( $input{$id}->{INPUT} );
 		$ct++;
 		last if ( $batchbytes > 0 && $bytes > $batchbytes );
 	}
 	return @list;
-}
-
-sub remaining_jobs {
-	my $j = shift;
-	my $c = 0;
-	foreach my $jid ( keys %{$j} ) {
-		next if $j->{$jid}->{finish};
-		$c++;
-	}
-	print stderr "Remaining jobs: $c\n";
-	return $c;
-}
-
-# Look for old inflight messages.
-# Move to retry queue
-#
-sub check_timeouts {
-	DEBUG("Checking timeouts");
-	foreach my $jstep ( keys %job ) {
-		next if $job{$jstep}->{finish};
-		my $retry = 0;
-
-		$retry = 1 if ( time > ( $job{$jstep}->{lastheartbeat} + $heartbeatto ) );
-		$retry = 1 if ( time > ( $job{$jstep}->{start} + $TIMEOUT ) );
-		if ($retry) {
-			WARN("RETRY: $jstep timed out or missed heartbeat.  Adding to retry.");
-			requeue_job($jstep);
-			$counters->{timeouts}++;
-		}
-	}
-	$next_check = time + $polltime / 2;
-}
-
-# Take inputs for job step
-# and put back on the queue.
-#
-sub requeue_job {
-	my $jstep = shift;
-
-	foreach my $inputid ( @{ $job{$jstep}->{list} } ) {
-		$input{$inputid}->{retry}++;
-		DEBUG( sprintf "Retrying %s for %d time",
-			$inputid, $input{$inputid}->{retry} );
-		if ( $input{$inputid}->{retry} < $MAXRETRY ) {
-			unshift @ondeck, $inputid;
-			$input{$inputid}->{status} = 'retry';
-		}
-		else {
-			ERROR("$inputid hit max retries");
-			push @failed, $inputid;
-		}
-	}
-	delete $job{$jstep};
-}
-
-#
-# Read in $read number of inputs from $in.
-# If $read is 0 then read until the eof.
-# Store input and return list.
-#
-sub read_input {
-	my $in   = shift;
-	my $read = shift;
-	my $ct   = 0;
-	my $l    = 0;
-	my $id;
-	my @list;
-
-	return @list if eof($in);
-	while (<$in>) {
-		die "Bad start: $_" if ( $l eq 0 && !/^>/ );
-		if (/^>/) {
-			$ct++;
-			last if ( $read && $ct > $read );
-			$id = ( tell($in) - length($_) );
-			$index++;
-			my ( $bl, $header, $rest ) = split /[> \r\n]/;
-			$input{$id}->{header} = $header;
-			$input{$id}->{input}  = $_;
-			$input{$id}->{retry}  = 0;
-			$input{$id}->{offset} = $id;
-			$input{$id}->{index}  = $index;
-			$input{$id}->{status} = 'ondeck';
-			push @list, $id;
-		}
-		else {
-			$input{$id}->{input} .= $_;
-		}
-		$l++;
-	}
-	my $length = length $_;
-	seek $in, -$length, 1 or die "Unable to step back: $length";
-
-	return @list;
-}
-
-#
-# Check that the fast recovery file isn't too new
-# This would indicate that another server may still
-# be running .
-#
-sub check_recovery_age {
-	my $filename=shift;
-	my $period=shift;
-	my @stat=stat $filename;
-	my $age=time()-$stat[9];
-	if ($age < $period ){
-		return 0;
-	}
-	return 1;
-}
-
-#
-# Read fast recovery file
-# Figure out where we were in the input stream.
-# Requeue any outstanding work.
-#
-sub fast_recovery {
-	my $filename = shift;
-	return unless ( -e $filename );
-	print STDERR "Recoverying using $filename\n";
-	my $fr = new IO::File($filename) or die "Unable to open $filename\n";
-
-	# Read the max index and offset
-	#
-	$_ = <$fr>;
-	$_ =~ s/.*max: //;
-	( $index, $offset ) = split;
-	my @offsets = <$fr>;
-	foreach (@offsets) {
-		seek $inputf, $_, 0 or die "Unable to seek to input file location $_\n";
-		die "Invalid offset: $_ is larger than $offset\n" if ( $_ > $offset );
-		push @ondeck, read_input( $inputf, 1 );
-	}
-	seek $inputf, $offset, 0 or die "Unable to seek to input file location\n";
-	printf LOG "Recovered %d inputs from $filename\n", scalar @ondeck;
-}
-
-sub check_inputs {
-	foreach my $inputid (@_) {
-		print stderr "Bad inputid: $inputid\n"
-			if ( !defined $inputid || $inputid eq '^$' );
-		die "Bad input in retry $inputid\n\n$input{$inputid}->{input}\n"
-			unless $input{$inputid}->{input} =~ /^>/;
-	}
-}
-
-# Write the fastrecovery file.
-# The first line is the index number and the offset into the
-#   query file.
-# This is followed by a list of inputs that were in process
-# This list must include retries, pending jobs, and ondeck.
-# The last is needed because the file pointer has already moved past
-#   the ondeck list of inputs.
-#
-sub write_fastrecovery {
-	my $filename = shift;
-	my $offset;
-	my @recoverylist;
-
-	open( FR, "> $filename.new" );
-
-	#  $offset=tell($inputf)-length($input{$next_header}->{input});
-	$offset = tell($inputf);
-	$offset = tell($inputf) if ( eof($inputf) );
-	printf FR "# max: %ld %ld\n", $index, $offset;
-	my $inputid;
-	my $ct = 0;
-
-	# Add failed jobs to the recovery list
-
-	push @recoverylist, @failed;
-
-	# Add jobs that were buffered but didn't get flushed before
-	# the server quit.
-	push @recoverylist, @buffered;
-
-	# What's in progress
-	foreach my $jstep ( keys %job ) {
-		next if $job{$jstep}->{finish};
-		foreach $inputid ( @{ $job{$jstep}->{list} } ) {
-			push @recoverylist, $inputid;
-		}
-	}
-	push @recoverylist, @ondeck;
-
-	check_inputs(@recoverylist);
-	foreach my $inputid (@recoverylist) {
-
-		#    print FR $input{$inputid}->{input};
-		printf FR "%d\n", $input{$inputid}->{offset};
-		$ct++;
-	}
-	close FR;
-
-	# Try to safely move the file in place.
-	#
-	unlink $filename;
-	link $filename . ".new", $filename or die "Unable to move $filename.new\n";
-	unlink $filename . ".new";
-	return $ct;
-}
-
-sub initialize_counters {
-	my $c    = shift;
-	my $q    = shift;
-	my @list = ( 'bytes_in', 'bytes_out', 'timeouts', 'errors' );
-	for my $field (@list) {
-		$c->{$field} = 0;
-	}
-	$c->{quantum} = $q;
-
-}
-
-sub update_job_stats {
-	my $jstep = shift;
-
-	if ( defined $job{$jstep} ) {
-		$job{$jstep}->{lastheartbeat} = time;
-	}
-}
-
-sub update_counters {
-	my $c  = shift;
-	my $j  = shift;
-	my $i  = shift;
-	my $od = shift;
-	my $output;
-	my $tss = time - $c->{start_time};
-
-	$c->{bytesin} = tell $inputf;
-	$c->{ondeck}  = scalar @{$od};
-
-	# Initialize epochs
-	my $epoch = int( $tss / ( $c->{quantum} ) );
-	if ( !defined $c->{h_bytesin}->{$epoch} ) {
-		$c->{h_bytesin}->{$epoch}  = 0;
-		$c->{h_bytesout}->{$epoch} = 0;
-		$c->{h_count}->{$epoch}    = 0;
-	}
-
-	foreach my $jid ( keys %{$j} ) {
-		my $job = $j->{$jid};
-		if ( $job->{finish} > $c->{last_update} ) {
-
-			# time series counters
-			my $epoch =
-				int( ( $job->{finish} - $c->{start_time} ) / ( $c->{quantum} ) );
-			$c->{h_bytesin}->{$epoch}  += $job->{bytesin};
-			$c->{h_bytesout}->{$epoch} += $job->{bytesout};
-			$c->{h_count}->{$epoch}    += $job->{count};
-
-			# total counters
-			$c->{bytesout} += $job->{bytesout};
-			$c->{count}    += $job->{count};
-		}
-	}
-	$c->{last_update} = time;
-
-	my $inflight = 0;
-	foreach my $id ( sort keys %{$i} ) {
-		my $in = $i->{$id};
-		$inflight++ if $i->{$id}->{status} eq 'in progress';
-	}
-	$c->{inflight} = $inflight;
-
-}
-
-sub write_stats {
-	my $c  = shift;
-	my $j  = shift;
-	my $i  = shift;
-	my $od = shift;
-	my $cf = shift;
-	my $output;
-	my $data;
-
-	$output = open( CF, "> $cf.new" );
-	$data->{counters} = $c;
-	$data->{jobs}     = $j;
-	$data->{input}    = $i;
-	$data->{ondeck}   = $od;
-	return unless $output;
-	print CF "{\"jobs\":[\n" if $output;
-	my $ct = 0;
-	foreach my $jid ( sort { $a <=> $b } keys %{$j} ) {
-		print CF ",\n" if $ct;
-		$ct++;
-		my $job = $j->{$jid};
-		printf CF
-"{\"id\":%d,\"start\":%d,\"finish\":%d,\"bytesin\":%d,\"bytesout\":%d,\"ident\":\"%s\"}",
-			$jid, $job->{start}, $job->{finish}, $job->{bytesin}, $job->{bytesout},
-			$job->{ident};
-	}
-	print CF "],\n";
-
-	print CF "\"inflight\":[\n";
-	my $ct = 0;
-	foreach my $id ( sort { $a <=> $b } keys %{$i} ) {
-		my $in = $i->{$id};
-		next unless $i->{status} eq 'in progress';
-		print CF ",\n" if $ct;
-		$ct++;
-		printf CF "{\"id\":\"%s\",\"header\":\"%s\",\"status\":\"%s\"}", $id,
-			$in->{header}, $in->{status}
-			if $output;
-	}
-	print CF "],\n";
-	print CF "\"counters\":{";
-	my $ct = 0;
-	foreach ( sort keys %{$c} ) {
-		print CF ",\n" if $ct;
-		$ct++;
-		if ( !ref( $c->{$_} ) ) {
-			printf CF "\"%s\":%d", $_, $c->{$_};
-		}
-		elsif ( UNIVERSAL::isa( $c->{$_}, 'HASH' ) ) {
-			printf CF "\"$_\":[";
-			my $ct = 0;
-			for my $key ( sort { $a <=> $b } keys %{ $c->{$_} } ) {
-				print CF "," if $ct;
-				$ct++;
-				printf CF "[%d,%d]", $key, $c->{$_}->{$key};
-			}
-			print CF "]";
-		}
-	}
-	print CF "}\n}\n";
-	close CF;
-
-	# Move the file into place
-	unlink $cf;
-	link $cf . ".new", $cf or die "Unable to move $cf.new\n";
-	unlink $cf . ".new";
-	chmod 0664, $cf;
-
-}
-
-sub delete_olddata {
-	my $j = shift;
-	my $i = shift;
-	foreach my $jid ( keys %{$j} ) {
-		next unless $j->{$jid}->{finish} > 0;
-		delete $j->{$jid} if $j->{$jid}->{finish} < time - 120;
-	}
-	foreach my $id ( sort keys %{$i} ) {
-		delete $i->{$id} if $i->{$id} && $i->{$id}->{status} eq 'completed';
-	}
-}
-
-sub DEBUG {
-	LOG( "DEBUG", shift ) if $debuglevel > 3;
-}
-
-sub INFO {
-	LOG( "INFO", shift ) if $debuglevel > 2;
-}
-
-sub WARN {
-	LOG( "WARN", shift ) if $debuglevel > 1;
-
-}
-
-sub ERROR {
-	LOG( "ERROR", shift ) if $debuglevel > 0;
-}
-
-sub LOG {
-	my $level   = shift;
-	my $message = shift;
-	print LOG "$level: $message\n";
 }
 
 =pod
@@ -1031,7 +595,7 @@ Adjust the timeout for a socket connection in seconds.  Default: 45.
 
 Filename to write the port for the listening socket.  This can be used by the client to automatically
 read the port.  Default: none
-my $result = GetOptions( "tfstatusfile=s"  => \$statusfile );
+my $result = GetOptions( "tfstatusfile=s"  => \$config->{STATUSFILE} );
 my $result = GetOptions( "tfpidfile=s"     => \$pidfile );
 my $result = GetOptions( "tfheartbeat=i"   => \$heartbeatto );
 
