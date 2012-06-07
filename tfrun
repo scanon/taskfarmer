@@ -21,6 +21,11 @@ trap cleanup 2 15
 
 # Source the configuration file
 [ -z $TF_HOME ] && export TF_HOME=$(dirname $0|sed 's/bin$//')
+[ -z $TF_BIN ] && export TF_BIN=$(dirname $0)
+if [ $(echo $TF_BIN|grep -c '^\.' ) -gt 0 ] ; then
+  PWD=`pwd`
+  TF_BIN=$(echo "$PWD/$TF_BIN"|sed 's/\.\///')
+fi
 [ -z $TF_CONFDIR ] && TF_CONFDIR=$TF_HOME/share/taskfarmer
 
 if [ -e $TF_CONFDIR/$NERSC_HOST.conf ] ; then
@@ -30,15 +35,16 @@ else
   exit
 fi
 
+
+
 # Get the address for the server
 #
 if [ -z $TF_ADDR ] && [ -z $TF_PORT ] && [ $# -gt 0 ] ; then
-  export TF_ADDR=$(/sbin/ifconfig $INT|grep 'inet addr'|awk -F: '{print $2}'|sed 's/ .*//')
-
+  export TF_ADDR=$(/sbin/ifconfig $INT|grep 'inet '|sed 's/ netmask.*//'|sed 's/.* //')
 # Start the server and record the PID
 #
   if [ $(basename $0) = "tfrun" ] ; then
-    $TF_HOME/bin/tf_server.pl "$@" &
+    $TF_BIN/tf_server.pl "$@" &
   else
     base=$(basename $0|sed 's/tf$//')
     APP=$(which $base 2>/dev/null) || (echo "Unable to find $base")
@@ -50,9 +56,15 @@ if [ -z $TF_ADDR ] && [ -z $TF_PORT ] && [ $# -gt 0 ] ; then
 #
 # Wait for the socket file to exist.
 #
-  while [ -d "/proc/$PID" ] && [ ! -e $SOCKFILE ] ; do
+  P=$(ps -p $PID|wc -l)
+  while [ $P -gt 1 ] && [ ! -e $SOCKFILE ] ; do
     sleep 1
+     P=$(ps -p $PID|wc -l)
   done
+  if [ $P -lt 2 ] ; then
+    echo "Server Exited"
+    exit
+  fi
   TF_PORT=$(cat $SOCKFILE)
   RETRIES=0
   while [ -z $TF_PORT ] ; do

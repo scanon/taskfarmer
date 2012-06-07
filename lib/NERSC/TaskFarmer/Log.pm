@@ -25,7 +25,7 @@ our @EXPORT_OK = ( @{ $EXPORT_TAGS{'all'} } );
 
 our @EXPORT = qw(
 	setlog
-	setdebuglevel
+	setloglevel
 	closelog
 	DEBUG
 	INFO
@@ -36,7 +36,8 @@ our @EXPORT = qw(
 our $VERSION = '0.01';
 
 our $log=\*STDERR;
-our $debuglevel=4;
+our $debuglevel=0;
+our $start = time;
 
 sub setlog {
         my $fname = shift;
@@ -49,7 +50,7 @@ sub closelog {
 	close($log) if defined $log;
 }
 
-sub setdebuglevel {
+sub setloglevel {
         $debuglevel=shift;
 }
 
@@ -77,7 +78,7 @@ sub ERROR {
 sub LOG {
         my $level   = shift;
         my $message = shift;
-        print {$log} "$level: $message\n";
+        printf {$log} "%5d %s: %s\n",time-$start,$level, $message;
 }
 
 1;

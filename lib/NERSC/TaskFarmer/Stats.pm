@@ -40,7 +40,7 @@ sub initialize_counters {
 		$counters->{$field} = 0;
 	}
 	$counters->{quantum} = $quant;
-	$counters->{size}   = $size;
+	$counters->{size}   = NERSC::TaskFarmer::Reader::getsize();
   $counters->{start_time} = time;
 }
 

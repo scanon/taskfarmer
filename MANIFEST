@@ -4,7 +4,6 @@ build_rpm
 call_graph.pl
 Changes
 DESIGN.proxy
-done.test.faa
 examples/blast.qsub
 examples/fix_perl_path.sh
 examples/mapreduce/map
@@ -25,7 +24,6 @@ examples/webstat/tfs.html
 examples/webstat/tfs.js
 extra/generate_fastrecovery
 extra/tf_dispatch
-fastrecovery.test.faa
 lib/NERSC/TaskFarmer.pm
 lib/NERSC/TaskFarmer/CPR.pm
 lib/NERSC/TaskFarmer/Jobs.pm
@@ -33,12 +31,8 @@ lib/NERSC/TaskFarmer/Log.pm
 lib/NERSC/TaskFarmer/Reader.pm
 lib/NERSC/TaskFarmer/Stats.pm
 LICENSE
-log.test.faa
 Makefile.PL
 MANIFEST			This list of files
-NERSC-TaskFarmer/MANIFEST
-NERSC-TaskFarmer/README
-progress.test.faa
 README
 resource.cfg.sample
 runcommands.sh

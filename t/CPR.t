@@ -20,17 +20,18 @@ BEGIN { use_ok('NERSC::TaskFarmer::CPR') };
 my $inputfile="testing/test.faa";
 my $fr="fr.test.faa";
 my %input;
-my $index=0;
-my $inputf = new IO::File $inputfile or die "Unable to open input file ($inputfile)\n";
 my $ct=32;
 my @q;
+my $config->{INPUT}=$inputfile;
 
-push @q,read_input($inputf,$ct,\%input,$index);
+init_read($config,\%input);
+push @q,read_input($ct);
 
-ok(write_fastrecovery($fr,$inputf,$index,\%input) eq $ct, 'write recovery test');
+ok(write_fastrecovery($fr,\%input) eq $ct, 'write recovery test');
 
 my %input2;
-my @q2=read_fastrecovery($fr,$inputf,$index,\%input2);
+init_read($config,\%input2);
+my @q2=read_fastrecovery($fr,\%input2);
 
 ok(scalar @q eq scalar @q2, 'recovery test');
 my $t1=$q[0];

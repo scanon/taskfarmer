@@ -35,7 +35,6 @@ our @EXPORT = qw(
 
 our $VERSION = '0.01';
 
-# Preloaded methods go here.
 #
 # Check that the fast recovery file isn't too new
 # This would indicate that another server may still
@@ -61,11 +60,10 @@ sub check_recovery_age {
 #
 sub read_fastrecovery {
 	my $filename = shift;
-	my $inputf   = shift;
-	my $index    = shift;
 	my $input    = shift;
 	my $offset   = 0;
 	my @q        = ();
+	my $index;
 
 	return unless ( -e $filename );
 
@@ -78,12 +76,13 @@ sub read_fastrecovery {
 	$_ =~ s/.*max: //;
 	( $index, $offset ) = split;
 	my @offsets = <$fr>;
-	foreach (@offsets) {
-		seek $inputf, $_, 0 or die "Unable to seek to input file location $_\n";
-		die "Invalid offset: $_ is larger than $offset\n" if ( $_ > $offset );
-		push @q, NERSC::TaskFarmer::Reader::read_input( $inputf, 1, $input, $index );
+	foreach my $o (@offsets) {
+		
+#		seek $inputf, $_, 0 or die "Unable to seek to input file location $_\n";
+		die "Invalid offset: $o is larger than $offset\n" if ( $o > $offset );
+		push @q, NERSC::TaskFarmer::Reader::read_input( 1, $o);
 	}
-	seek $inputf, $offset, 0 or die "Unable to seek to input file location\n";
+	setpos($index,$offset);
 
 #        printf LOG "Recovered %d inputs from $filename\n", scalar @{$state->{ondeck}};
 	return @q;
@@ -99,18 +98,14 @@ sub read_fastrecovery {
 #
 sub write_fastrecovery {
 	my $filename = shift;
-	my $inputf   = shift;
-	my $index    = shift;
 	my $input    = shift;
-	my $offset;
 	my @recoverylist;
 
 	open( FR, "> $filename.new" );
 
 	#  $offset=tell($inputf)-length($input{$next_header}->{input});
-	$offset = tell($inputf);
+	my ($index,$offset) = getpos();
 	printf FR "# max: %ld %ld\n", $index, $offset;
-	my $inputid;
 	my $ct = 0;
 
 	for my $inputid ( sort { $a <=> $b } keys %{$input} ) {

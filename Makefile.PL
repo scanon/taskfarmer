@@ -7,8 +7,7 @@ use ExtUtils::MakeMaker;
 WriteMakefile(
     NAME              => 'NERSC::TaskFarmer',
     VERSION_FROM      => 'lib/NERSC/TaskFarmer.pm', # finds $VERSION
-#    DIR		      => [ 'share' ],
-    EXE_FILES	      => [ 'tfrun.sh', 'tf_server.pl', 'tf_worker', 'tf_worker_thread.pl' ],
+    EXE_FILES	      => [ 'tfrun', 'tf_server.pl', 'tf_worker', 'tf_worker_thread.pl' ],
 #    NOECHO		=> '',
     PREREQ_PM         => {}, # e.g., Module::Name => 1.1
     ($] >= 5.005 ?     ## Add these new keywords supported since 5.005
@@ -19,22 +18,13 @@ WriteMakefile(
 
 package MY; # so that "SUPER" works right
 
-sub  post_constants {
-  return << 'POST';
-SHAREFILES=    share/*.conf share/submit_es.q share/stage.cacher
-POST
-}
-
-# Need to override install to pick up the examples stuff.
+# Need to override parts of install to pick up the share and examples stuff.
 #
 sub install {
     my $inherited = shift->SUPER::install(@_);
     my $new = "";
 
     foreach (split /\n/,$inherited){
-#        if (/doc_site_install ::/){
-#          $_.=" examples_site_install";
-#        }
        if (/write.*SITE/){
          $_.="\n";
          $_.="\t\tblib/share/taskfarmer/ \$(DISTDIR)/\$(SITEPREFIX)/share/taskfarmer/ \\";
@@ -44,6 +34,9 @@ sub install {
     return "$new";
 }
 
+#
+# Copy share/examples into blib
+#
 sub  subdirs {
   return << 'SUB';
 subdirs ::

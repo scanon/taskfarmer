@@ -15,9 +15,10 @@ BEGIN { use_ok('NERSC::TaskFarmer::Log') };
 my $lfile="test.log";
 
 unlink $lfile if ( -e $lfile);
+setloglevel(1);
 ERROR('Send error to standard error');
 DEBUG('Send debug to standard error');
-NERSC::TaskFarmer::Log::setlog('test.log',1);
+setlog('test.log',1);
 
 DEBUG('test');
 ERROR('error');
@@ -25,7 +26,7 @@ open(L,$lfile);
 $l=<L>;
 chomp $l;
 close L;
-ok($l eq 'ERROR: error', 'Test Error Log');
+ok($l=~/ERROR: error/, 'Test Error Log');
 #ok($input{$t1}->{offset} eq $input2{$t1}->{offset}, 'test recovery inputs');
 
 unlink ($lfile) if ( -e $lfile);

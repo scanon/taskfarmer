@@ -1,6 +1,9 @@
 #!/usr/bin/env perl
 
 # TODO Close files that aren't accessed for a while
+# TODO Move output handler to separate module
+# TODO Move scratchbuffer into Jobs.pm
+
 use threads;
 use threads::shared;
 use Socket;
@@ -9,6 +12,8 @@ use IO::File;
 use IO::Socket::INET;
 use strict;
 use Getopt::Long;
+use NERSC::TaskFarmer::Reader;
+use NERSC::TaskFarmer::Config;
 use NERSC::TaskFarmer::Jobs;
 use NERSC::TaskFarmer::CPR;
 use NERSC::TaskFarmer::Stats;
@@ -21,14 +26,11 @@ die "No input file specified\n" unless defined $config->{INPUT};
 
 #  Global vars
 #
-my $progress_buffer = '';
 
 # shared
 my %input;
 my %output;
 my %scratchbuffer;
-
-#my %job;
 
 # These become thread queues
 my @ondeck;
@@ -36,31 +38,25 @@ my @ondeck;
 #my @failed;
 my @buffered;
 
-initialize_jobs( \%input, $config, \@buffered, \@ondeck );
+initialize_jobs( \%input, $config, \@buffered, \@ondeck, \%scratchbuffer, \%output );
 
 # Not sure...
-#my $item;
-#my $offset;
-my $index      = 0;
 my $next_flush = time + $config->{FLUSHTIME};
 
 my $processed   = 0;
-my $buffer_size = 0;
-my $chunksize   = 2 * $config->{BATCHSIZE};
 my $shutdown    = 0;
 
-my $inputf = new IO::File $config->{INPUT}
-	or die "Unable to open input file ($config->{INPUT})\n";
+init_read($config, \%input);
 
 # Check the age of the recovery file
 #
 if ( !check_recovery_age($config) ) {
-	print stderr "Fast Recovery it too new.\n";
+	print stderr "Fast Recovery is too new.\n";
 	print stderr
 "Check that another server isn't running and retry in $config->{FLUSHTIME} seconds\n";
 	exit 1;
 }
-read_fastrecovery( $config->{FR_FILE}, $inputf, $index, \%input );
+read_fastrecovery( $config->{FR_FILE}, \%input );
 
 # make the socket
 my %sockargs = (
@@ -75,34 +71,15 @@ $sockargs{LocalPort} = $config->{port} if defined $config->{port};
 my $sock = new IO::Socket::INET->new(%sockargs)
 	or die "Unable to create socket\n";
 
-if ( defined $config->{SOCKFILE} ) {
-	writeline($config->{SOCKFILE},$sock->sockport()."\n");
-}
+writeline( $config->{SOCKFILE}, $sock->sockport() . "\n" );
+writeline( $config->{PIDFILE}, $$ . "\n" );
 
-if ( defined $config->{PIDFILE} ) {
-	writeline($config->{PIDFILE},$$."\n");
-}
-
-my $remaining_jobs   = 1;
-my $remaining_inputs = 1;
 my $ident;
 my $command;
 
-my @stati = stat $inputf;
-initialize_counters( $config->{STATUSFILE}, $config->{WINDOWTIME}, $stati[7] );
-#$counters->{size}       = $stati[7];
-#$counters->{quantum}    = $config->{WINDOWTIME};
-#$counters->{start_time} = time;
+initialize_counters( $config->{STATUSFILE}, $config->{WINDOWTIME} );
 
-open( PROGRESS, ">> $config->{PROGRESSFILE}" );
 setlog( $config->{LOGFILE}, $config->{debuglevel} );
-
-#open( LOG,      ">> $config->{LOGFILE}" );
-
-#my $log = new IO::File "log.$inputfile" or die "Unable to open input file (log.$inputfile)\n";
-select LOG;
-$| = 1;
-select STDOUT;
 
 # Catch sigint and do a drain.
 #
@@ -116,7 +93,10 @@ $SIG{'USR2'} = sub {
 };
 
 # This is the main work loop.
-while ( $remaining_jobs || $remaining_inputs ) {
+
+my $rj=1;
+my $ri=1;
+while ( $rj || $ri ) {
 	my $new_sock = $sock->accept();
 	if ( defined $new_sock ) {
 		my $clientaddr = $new_sock->peerhost();
@@ -132,31 +112,24 @@ while ( $remaining_jobs || $remaining_inputs ) {
 		close $new_sock;
 	}
 	check_timeouts();
-	flush_output()
-		if ( time > $next_flush || $buffer_size > $config->{MAXBUFF} );
+	flush_output();
+	$rj=remaining_jobs();
+	$ri=remaining_inputs();
+#	printf STDERR "DEBUG: $rj $ri\n";
 
-	$remaining_inputs = remaining_inputs();
-	if ( eof($inputf) || $shutdown ) {
+	if ( endoffile() || $shutdown ) {
 		$shutdown       = 1;                   # In case eof got us here.
-		$remaining_jobs = remaining_jobs();    # How much pending stuff is there?
-		INFO("Draining: $remaining_jobs remaining connections.");
-		INFO("Draining: $remaining_inputs remaining inputs");
+		INFO("Draining: $rj remaining connections.");
+		INFO("Draining: $ri remaining inputs");
 	}
 }
 finalize_jobs();
-
-#update_counters( $counters, \%job, \%input, \@ondeck );
-#write_stats( $counters, \%job, \%input, \@ondeck, $config->{STATUSFILE} )
-#	if defined $config->{STATUSFILE};
 
 INFO("Doing final flush");
 flush_output();
 close_all();
 INFO("All done");
-if ( defined $config->{DONEFILE} && failed_jobs() == 0 ) {
-	writeline($config->{DONEFILE},"done")
-}
-close PRROGRESS;
+writeline( $config->{DONEFILE}, "done" ) if (failed_jobs() eq 0);
 closelog();
 
 # Interrupt handler
@@ -169,71 +142,17 @@ sub catch_int {
 		flush_output();
 		close_all();
 		ERROR("Exiting");
-		close PRROGRESS;
-		close PROGRESS;
-		close LOG;
+		closelog();
 		exit;
 	}
 	else {
+		my $rem=remaining_jobs();
 		$shutdown = 2;
 		flush_output();
-		$remaining_jobs = remaining_jobs();
 		ERROR("Shutting down on signal $signame");
-		ERROR("Draining: $remaining_jobs remaining connections");
+		ERROR("Draining: $rem remaining connections");
 		$shutdown = 1;
 	}
-}
-
-#
-# Initialize parameters
-#
-sub initialize_conf {
-	my $config = {
-		BATCHSIZE       => 32,
-		BATCHBYTES      => 0,
-		TIMEOUT         => 1800,
-		SOCKET_TIMEOUT  => 10,
-		heartbeatto     => 600,
-		MAXRETRY        => 8,
-		MAXBUFF         => 100 * 1024 * 1024,    # 100M buffer
-		FLUSHTIME       => 20,                   # write
-		WINDOWTIME      => 60 * 10,              # 10 minutes
-		POLLTIME        => 600,
-		closetime       => 600,
-		REQUEST_TIMEOUT => 10,
-		debuglevel      => 1,
-	};
-	my $result;
-
-	# Override defaults
-	for my $param qw(BATCHSIZE BATCHBYTES SOCKET_TIMEOUT PORT SOCKFILE) {
-		$config->{$param} = $ENV{$param} if defined $ENV{$param};
-	}
-
-	$config->{TIMEOUT} = $ENV{SERVER_TIMEOUT} if defined $ENV{SERVER_TIMEOUT};
-	Getopt::Long::Configure("pass_through");
-	$result = GetOptions( "i=s"             => \$config->{INPUT} );
-	$result = GetOptions( "tfbatchsize=i"   => \$config->{BATCHSIZE} );
-	$result = GetOptions( "tfbatchbytes=i"  => \$config->{BATCHBYTES} );
-	$result = GetOptions( "tftimeout=i"     => \$config->{TIMEOUT} );
-	$result = GetOptions( "tfsocktimeout=i" => \$config->{SOCKET_TIMEOUT} );
-	$result = GetOptions( "tfsockfile=s"    => \$config->{SOCKFILE} );
-	$result = GetOptions( "tfstatusfile=s"  => \$config->{STATUSFILE} );
-	$result = GetOptions( "tfpidfile=s"     => \$config->{PIDFILE} );
-	$result = GetOptions( "tfdebuglevel=i"  => \$config->{debuglevel} );
-	$result = GetOptions( "tfheartbeat=i"   => \$config->{heartbeatto} );
-
-	# Calculated values
-	$config->{POLLTIME} = $config->{TIMEOUT};
-	$config->{POLLTIME} = $config->{heartbeatto}
-		if ( $config->{TIMEOUT} > $config->{heartbeatto} );
-	my $inputfile = $config->{INPUT};
-	$inputfile =~ s/.*\///;
-	$config->{FR_FILE}      = "fastrecovery." . $inputfile;
-	$config->{DONEFILE}     = "done." . $inputfile;
-	$config->{PROGRESSFILE} = "./progress." . $inputfile;
-	$config->{LOGFILE}      = "./log." . $inputfile;
-	return $config;
 }
 
 sub close_all {
@@ -251,8 +170,11 @@ sub snapshottimeout {
 
 sub writeline {
 	my $filename = shift;
-	my $line = shift;
-	
+	my $line     = shift;
+	return if (! defined $filename);
+	open(F,"> $filename") or die "Unable to open $filename";
+	print F $line;
+	close F;
 }
 
 sub do_request {
@@ -269,7 +191,7 @@ sub do_request {
 	#
 	while (<$sock>) {
 
-		#		DEBUG("COMMAND: $_");
+#		DEBUG("COMMAND: $_");
 		if (/^RESULTS /) {
 			my ( $command, $jstep ) = split;
 			chomp $jstep;
@@ -301,7 +223,7 @@ sub do_request {
 
 				# Queue process job && defined $job{$jstep}
 				print $sock "RECEIVED $jstep\n";
-				my $status = process_results($jstep);
+				my $status = process_job( $jstep, $ident, $bytes );
 			}
 			elsif ( !$success && isajob($jstep) ) {
 				ERROR("Job step $jstep");
@@ -319,10 +241,12 @@ sub do_request {
 			( $command, $ident ) = split;
 		}
 		elsif (/^NEXT$/) {
-			if ( $shutdown && !$remaining_inputs ) {
+			if ( $shutdown && !remaining_inputs() ) {
+				DEBUG("Sending shutdown to $ident\n");
 				print $sock "SHUTDOWN\n";
 			}
-			print $sock send_work($ident);
+			my $job=queue_job($ident);
+			print $sock send_work( $job );
 			last;
 		}
 		elsif (/^ARGS$/) {
@@ -363,7 +287,6 @@ sub do_request {
 			print stderr "Recieved unusual response from $clientaddr: $_";
 		}
 	}
-
 	return $status;
 }
 
@@ -404,10 +327,35 @@ sub read_file {
 	}
 }
 
+#
+# Send work
+sub send_work {
+	my $job    = shift;
+	my $buffer = "";
+
+	# Send the list if there is one.
+	if ( defined $job ) {
+		my $jid    = $job->{jid};
+		my $length = $job->{length};
+		$buffer = "STEP: $jid\n";
+		$buffer.=get_inputs(@{$job->{list}});
+		
+		INFO("Sent: $jid hostid:$ident length:$length");
+	}
+	# If no work then send a shutdown
+	else {
+		$buffer = "SHUTDOWN";
+	}
+	return $buffer;
+}
+
 # Flush output, progress, and create fast_recovery file
 # This tries to keep everything in a consistent state.
 #
 sub flush_output {
+	return unless ( time > $next_flush );
+	#|| $buffer_size > $config->{MAXBUFF} );
+	
 	DEBUG("Flush called");
 	foreach my $file ( keys %output ) {
 		my $bf = $output{$file}->{buffer};
@@ -438,46 +386,14 @@ sub flush_output {
 		$output{$file}->{buffer} = '';
 	}
 
-	map { $input{$_}->{status} = 'completed' } @buffered;
+  update_status('completed',@buffered);
+#	map { $input{$_}->{status} = 'completed' } @buffered;
 	@buffered = ();
-	flush LOG;
-	print PROGRESS $progress_buffer;
-	flush PROGRESS;
-	$progress_buffer = '';
-	$buffer_size     = 0;
+	flushprogress();
 
-	my $ct = write_fastrecovery( $config->{FR_FILE}, $inputf, $index, \%input );
+	my $ct = write_fastrecovery( $config->{FR_FILE}, \%input, 1 );
 	DEBUG("Wrote fast recovery ($ct items)");
 	$next_flush = time + $config->{FLUSHTIME};
-}
-
-#
-# This builds up a work list of args inputs.
-# It will read in more input if there isn't enough ondeck.
-#
-sub build_list {
-	my $batchsize  = shift;
-	my $batchbytes = shift;
-	my @list;
-	my @tlist;
-	my $ct    = 0;
-	my $bytes = 0;
-
-	# Build rest from ondeck
-	#
-	if ( scalar @ondeck < ( $batchsize - $ct ) ) {
-		@tlist = NERSC::TaskFarmer::Reader::read_input( $inputf, $chunksize );
-		$index += scalar @tlist;
-		push @ondeck, @tlist;
-	}
-	while ( $ct < $batchsize && scalar @ondeck > 0 ) {
-		my $id = shift @ondeck;
-		push @list, $id;
-		$bytes += length( $input{$id}->{INPUT} );
-		$ct++;
-		last if ( $batchbytes > 0 && $bytes > $batchbytes );
-	}
-	return @list;
 }
 
 =pod
