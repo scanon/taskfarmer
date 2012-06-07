@@ -77,7 +77,7 @@ writeline( $config->{PIDFILE}, $$ . "\n" );
 my $ident;
 my $command;
 
-initialize_counters( $config->{STATUSFILE}, $config->{WINDOWTIME} );
+initialize_counters( $config, \%input );
 
 setlog( $config->{LOGFILE}, $config->{debuglevel} );
 
@@ -126,7 +126,7 @@ while ( $rj || $ri ) {
 finalize_jobs();
 
 INFO("Doing final flush");
-flush_output();
+flush_output(1);
 close_all();
 INFO("All done");
 writeline( $config->{DONEFILE}, "done" ) if (failed_jobs() eq 0);
@@ -353,7 +353,9 @@ sub send_work {
 # This tries to keep everything in a consistent state.
 #
 sub flush_output {
-	return unless ( time > $next_flush );
+	my $force = shift;
+	
+	return unless ( time > $next_flush || defined $force );
 	#|| $buffer_size > $config->{MAXBUFF} );
 	
 	DEBUG("Flush called");

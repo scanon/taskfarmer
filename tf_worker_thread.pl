@@ -284,6 +284,7 @@ sub run_application{
   		}
   		select(undef, undef, undef, $polltime);
   	}
+  	# Exit code from waitpid (child process)
   	$exit=$?>>8;
   }
   else{

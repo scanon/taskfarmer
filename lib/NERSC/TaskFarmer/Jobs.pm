@@ -10,6 +10,7 @@ require Exporter;
 
 use NERSC::TaskFarmer::Log;
 use NERSC::TaskFarmer::Reader;
+use NERSC::TaskFarmer::Stats;
 
 our @ISA = qw(Exporter);
 
@@ -60,6 +61,7 @@ our $item = 0;
 our $config;
 our $next_check;
 our $next_status;
+our $last_status = 0;
 our $pf;
 our $chunksize;
 
@@ -209,17 +211,15 @@ sub remaining_inputs {
 	return 1 if (! endoffile())	;
 	foreach (keys %{$input}){
 		my $s=$input->{$_}->{status};
-		print "DEBUG: $_ $input->{$_}->{status}\n";
 		return 1 if ($s ne 'completed' && $s ne 'failed' && $s ne 'buffered');
 	}
 	return 0;
 }
 
 sub remaining_jobs {
-	my $j = shift;
 	my $c = 0;
-	foreach my $jid ( keys %{$j} ) {
-		next if $j->{$jid}->{finish}>0;
+	foreach my $jid ( keys %job ) {
+		next if $job{$jid}->{finish}>0;
 		$c++;
 	}
 
@@ -239,11 +239,10 @@ sub flushprogress {
 sub check_timeouts {
 	DEBUG("Checking timeouts");
 	if ( time > $next_status ) {
-		#update_counters( \%job, $input, $ondeck );
-
+		update_counters( \%job, 0);
+		$last_status=time;
 		$next_status = time + $config->{FLUSHTIME};
 	}
-
 	delete_olddata();
 	return unless ( time > $next_check );
 	foreach my $jstep ( keys %job ) {
@@ -256,7 +255,7 @@ sub check_timeouts {
 		if ($retry) {
 			WARN("RETRY: $jstep timed out or missed heartbeat.  Adding to retry.");
 			requeue_job($jstep);
-			increment_timeout();
+			increment_timeouts();
 		}
 	}
 	$next_check = time + $config->{POLLTIME} / 2;
@@ -293,22 +292,27 @@ sub update_job_stats {
 
 	if ( defined $job{$jstep} ) {
 		$job{$jstep}->{lastheartbeat} = time;
+		return $job{$jstep}->{lastheartbeat};
 	}
+	return 0;
 }
 
 sub delete_olddata {
+	my $ct;
 	foreach my $jid ( keys %job ) {
 		next unless $job{$jid}->{finish} > 0;
-		delete $job{$jid} if $job{$jid}->{finish} < time - 120;
+		delete $job{$jid} if $job{$jid}->{finish} < $last_status;
+		$ct++;
 	}
-
+	return $ct;
 }
 
 sub finalize_jobs {
-	#TODO Fix stats
 	flushprogress();
-	NERSC::TaskFarmer::Reader::check_inputs( @{$ondeck} );
-	#NERSC::TaskFarmer::Stats::update_counters( \%job, $input, $ondeck, 0 );
+	#Let's do this somewhere else.  May in CPR.
+	#NERSC::TaskFarmer::Reader::check_inputs( @{$ondeck} );
+
+	update_counters( \%job, 0 );
 }
 
 1;

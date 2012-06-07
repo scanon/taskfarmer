@@ -1,4 +1,3 @@
-.Makefile.PL.swp
 .project
 build_rpm
 call_graph.pl
@@ -36,7 +35,6 @@ MANIFEST			This list of files
 README
 resource.cfg.sample
 runcommands.sh
-scripts/tf_server.pl
 share/carver.conf
 share/franklin.conf
 share/franklin.stage

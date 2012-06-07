@@ -25,23 +25,32 @@ our @EXPORT = qw(
 	initialize_counters
 	update_counters
 	write_stats
+	increment_errors
+	increment_timeouts
 );
 
 our $VERSION = '0.01';
 our $counters;
 our $statusfile;
+our $inputs;
+our $ondeck;
+our $config;
 
 sub initialize_counters {
-	$statusfile = shift;
-	my $quant    = shift;
+	$config = shift;
+	$inputs  = shift;
+	$ondeck = shift;
+	
 	my $size = shift;
-
+	my $statusfile=$config->{STATUSFILE};
+	
 	for my $field qw( bytes_in bytes_out timeouts errors ) {
 		$counters->{$field} = 0;
 	}
-	$counters->{quantum} = $quant;
+	$counters->{quantum} = $config->{WINDOWTIME};
 	$counters->{size}   = NERSC::TaskFarmer::Reader::getsize();
   $counters->{start_time} = time;
+  $counters->{last_update} = 0;
 }
 
 sub increment_errors{
@@ -53,15 +62,13 @@ sub increment_timeouts{
 }
 
 sub update_counters {
-	my $jobs  = shift;
-	my $inputs  = shift;
-	my $od = shift;
+	my $jobs = shift;
 	my $bytesin = shift;
 	my $output;
 	my $tss = time - $counters->{start_time};
 
 	$counters->{bytesin} = $bytesin;
-	$counters->{ondeck}  = scalar @{$od};
+	$counters->{ondeck}  = scalar @{$ondeck};
 
 	# Initialize epochs
 	my $epoch = int( $tss / ( $counters->{quantum} ) );
@@ -96,24 +103,22 @@ sub update_counters {
 	}
 	$counters->{inflight} = $inflight;
 
-		write_stats( $jobs, $inputs, $od )
+		write_stats( $jobs )
 			if defined $statusfile;
 }
 
 sub write_stats {
-	my $j  = shift;
-	my $i  = shift;
-	my $od = shift;
+	my $jobs=shift;
 	my $output;
 
 	$output = open( CF, "> $statusfile.new" );
 	return unless $output;
 	print CF "{\"jobs\":[\n" if $output;
 	my $ct = 0;
-	foreach my $jid ( sort { $a <=> $b } keys %{$j} ) {
+	foreach my $jid ( sort { $a <=> $b } keys %{$jobs} ) {
 		print CF ",\n" if $ct;
 		$ct++;
-		my $job = $j->{$jid};
+		my $job = $jobs->{$jid};
 		printf CF
 "{\"id\":%d,\"start\":%d,\"finish\":%d,\"bytesin\":%d,\"bytesout\":%d,\"ident\":\"%s\"}",
 			$jid, $job->{start}, $job->{finish}, $job->{bytesin}, $job->{bytesout},
@@ -123,9 +128,9 @@ sub write_stats {
 
 	print CF "\"inflight\":[\n";
 	$ct = 0;
-	foreach my $id ( sort { $a <=> $b } keys %{$i} ) {
-		my $in = $i->{$id};
-		next unless $i->{status} eq 'in progress';
+	foreach my $id ( sort { $a <=> $b } keys %{$inputs} ) {
+		my $in = $inputs->{$id};
+		next unless $inputs->{status} eq 'in progress';
 		print CF ",\n" if $ct;
 		$ct++;
 		printf CF "{\"id\":\"%s\",\"header\":\"%s\",\"status\":\"%s\"}", $id,

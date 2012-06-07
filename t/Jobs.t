@@ -3,9 +3,9 @@
 
 #########################
 
-use Test::More tests => 9;
-use IO::File;
+use Test::More tests => 16;
 use NERSC::TaskFarmer::Config;
+use NERSC::TaskFarmer::Stats;
 
 BEGIN { use_ok('NERSC::TaskFarmer::Jobs') }
 
@@ -23,7 +23,12 @@ my $ct = 128;
 my $pf = "$$.pf";
 
 $config->{PROGRESSFILE} = $pf;
+
+# Force it so we can get into timeout loops
+$config->{FLUSHTIME}=0;
+$config->{POLLTIME}=0;
 initialize_jobs( \%input, $config, \@buf, \@od, \%sb, \%out);
+initialize_counters( $config, \%input, \@od);
 
 # Build fake inputs
 for $id ( 1 .. $ct ) {
@@ -39,11 +44,19 @@ for $id ( 1 .. $ct ) {
 ok( isajob('x') eq 0, 'Non job' );
 
 my $job=queue_job('tester');
-ok(defined $job, 'send_work test');
+my $jid=$job->{jid};
+ok(defined $job, 'queue_job test');
 
-ok(isajob($job->{jid}) eq 1, 'isajob true');
+ok(isajob($jid) eq 1, 'isajob true');
 
 ok(remaining_inputs() eq 1,'remaining_inputs test');
+
+printf "Remaining jobs %d\n", remaining_jobs();
+ok(remaining_jobs() eq 1, 'remaining_jobs test');
+
+# Simulate an heartbeat update
+my $t=update_job_stats($jid);
+ok($t>0,'Update heartbeat test');
 
 # Simulate a job completing
 my $ret=process_job($job->{jid},'tester',1);
@@ -69,22 +82,39 @@ my @st=stat $pf;
 ok($st[7] > 0, 'Progress File Test');
 unlink $pf;
 
-# Things to test
-# failed a job
-# requeue a job
-# cleanup
+my $d=delete_olddata();
+print "Deleted $d jobs\n";
+ok($d>0,'delete_olddata test');
 
-#sub initialize_jobs {
-#sub process_results {
-#                substr( $inputs, 0, 25 ),
-#sub send_work {
-#sub isajob {
-#sub remaining_inputs{
-#sub remaining_jobs {
-#sub check_timeouts {
-#sub requeue_job {
-#sub failed_jobs {
-#sub update_job_stats {
-#sub delete_olddata {
-#sub finalize_jobs {
+# This should not timeout
+$job=queue_job('tester');
+$id=@{$job->{list}}[0];
+sleep 1;
+check_timeouts();
+ok($input{$id}->{status} eq 'in progress', 'Timeout test success');
+
+# Cause a timeout
+$config->{TIMEOUT}=0;
+sleep 1;
+check_timeouts();
+printf "Status %s\n",$input{$id}->{status};
+ok($input{$id}->{status} eq 'retry', 'Timeout test');
+$job=queue_job('tester');
+
+# Now heartbeats
+$config->{TIMEOUT}=10;
+$job=queue_job('tester');
+$id=@{$job->{list}}[0];
+sleep 1;
+check_timeouts();
+ok($input{$id}->{status} eq 'in progress', 'Heartbeat Timeout test success');
+$config->{heartbeatto}=0;
+sleep 1;
+check_timeouts();
+#printf "Status %s\n",$input{$id}->{status};
+ok($input{$id}->{status} eq 'retry', 'Timeout test');
+
+
+finalize_jobs();
+
 

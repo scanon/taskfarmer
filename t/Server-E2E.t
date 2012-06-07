@@ -19,28 +19,30 @@ if (scalar (@ARGV) > 0 ){
 }
 
 
-use Test::More tests => 2;
+use Test::More tests => 3;
 
 BEGIN { use_ok('NERSC::TaskFarmer::Tester') }
 
 #########################
 
+$ENV{TF_HOME}="./blib";
 $ENV{NERSC_HOST}="test";
 
 my $pwd=`pwd`;
 chomp $pwd;
 
+$ENV{TF_POLLTIME}=0.001;
 $ENV{ARG_OUT}="$pwd/test.args";
 
 my $TFILE = "./testing/test.faa";
-
+my $PFILE = "./progress.test.faa";
 my $ME="$pwd/$0";
 
 # Run server
-print STDERR qx "./blib/script/tfrun --tfdebuglevel=3 --tfbatchsize=512 -i $TFILE $pwd/t/args.sh arg1 arg2 'a b' > test.out 2> test.err";
+print STDERR qx "./blib/script/tfrun --tfdebuglevel=3 --tfbatchsize=32 -i $TFILE $pwd/t/args.sh arg1 arg2 'a b' > test.out 2> test.err";
 
 ok(-e "./test.args", "Args test");
+ok(checklines($TFILE,$PFILE) eq 1, "Check Output");
 
-#cleanup_tests();
-
+cleanup_tests();
 

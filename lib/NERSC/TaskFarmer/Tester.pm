@@ -27,6 +27,7 @@ our @EXPORT_OK = ( @{ $EXPORT_TAGS{'all'} } );
 
 our @EXPORT = qw(
 	cleanup_tests
+	checklines
 );
 
 sub wc {
@@ -36,6 +37,24 @@ sub wc {
 	else{
 		return "/bin/wc";
 	}
+}
+
+sub checklines {
+  my $tfile=shift;
+  my $pfile=shift;
+  my $plines;
+  my $elines;
+  open(P,$pfile) or return 0;
+  while(<P>){
+    my @e=split /,/,$_;
+    $plines+=scalar @e;
+  }
+  open(I,$tfile);
+  while(<I>){
+  	$elines++ if /^>/;
+  }
+  print "p: $plines $elines\n";
+  return ($plines eq $elines);
 }
 
 sub cleanup_tests {
