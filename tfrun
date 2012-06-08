@@ -4,6 +4,10 @@
 #
 export SOCKFILE=./.sockfile.$$
 
+checkpid () {
+   return $(ps -p $PID > /dev/null) 
+}
+
 cleanup () {
   echo "Shutting down" 1>&2
   if [ -e $PID ] ; then
@@ -56,12 +60,10 @@ if [ -z $TF_ADDR ] && [ -z $TF_PORT ] && [ $# -gt 0 ] ; then
 #
 # Wait for the socket file to exist.
 #
-  P=$(ps -p $PID|wc -l)
-  while [ $P -gt 1 ] && [ ! -e $SOCKFILE ] ; do
+  while  ps -p $PID > /dev/null && [ ! -e $SOCKFILE ] ; do
     sleep 1
-     P=$(ps -p $PID|wc -l)
   done
-  if [ $P -lt 2 ] ; then
+  if ! ps -p $PID > /dev/null ; then
     echo "Server Exited"
     exit
   fi
@@ -109,9 +111,10 @@ if [ -z $EXTERNAL_SERVER ] ; then
   sleep 1
   if [ ! -z $PID ] ; then
     echo "Killing Server" 1>&2
-    [ -d /proc/$PID ]  && kill -INT $PID > /dev/null 2>&1
-    [ -d /proc/$PID ]  && kill -INT $PID > /dev/null 2>&1
-    [ -d /proc/$PID ]  && kill $PID > /dev/null 2>&1
+    ps -p $PID > /dev/null  && kill -INT $PID > /dev/null 2>&1
+#    [ -d /proc/$PID ]  && kill -INT $PID > /dev/null 2>&1
+#    [ -d /proc/$PID ]  && kill -INT $PID > /dev/null 2>&1
+#    [ -d /proc/$PID ]  && kill $PID > /dev/null 2>&1
   fi
   [ -e $SOCKFILE ] && rm $SOCKFILE
 fi

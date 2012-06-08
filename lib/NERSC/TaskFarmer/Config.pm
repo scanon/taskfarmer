@@ -47,7 +47,8 @@ sub initialize_conf {
 	my $result;
 
 	# Override defaults
-	for my $param qw(BATCHSIZE BATCHBYTES SOCKET_TIMEOUT PORT SOCKFILE) {
+	for my $param qw(BATCHSIZE BATCHBYTES SOCKET_TIMEOUT PORT SOCKFILE FLUSHTIME)
+	{
 		$config->{$param} = $ENV{$param} if defined $ENV{$param};
 	}
 
@@ -68,6 +69,9 @@ sub initialize_conf {
 	$config->{POLLTIME} = $config->{TIMEOUT};
 	$config->{POLLTIME} = $config->{heartbeatto}
 		if ( $config->{TIMEOUT} > $config->{heartbeatto} );
+	$config->{POLLTIME} = $config->{FLUSHTIME}
+		if ( $config->{TIMEOUT} > $config->{FLUSHTIME} );
+
 	if ( defined $config->{INPUT} ) {
 		my $inputfile = $config->{INPUT};
 		$inputfile =~ s/.*\///;

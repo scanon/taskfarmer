@@ -73,6 +73,7 @@ sub read_fastrecovery {
 	# Read the max index and offset
 	#
 	$_ = <$fr>;
+	die "Bad fast recovery file" if ! defined $_;
 	$_ =~ s/.*max: //;
 	( $index, $offset ) = split;
 	my @offsets = <$fr>;

@@ -56,7 +56,7 @@ if ( !check_recovery_age($config) ) {
 "Check that another server isn't running and retry in $config->{FLUSHTIME} seconds\n";
 	exit 1;
 }
-read_fastrecovery( $config->{FR_FILE}, \%input );
+push @ondeck, read_fastrecovery( $config->{FR_FILE}, \%input );
 
 # make the socket
 my %sockargs = (
@@ -77,7 +77,7 @@ writeline( $config->{PIDFILE}, $$ . "\n" );
 my $ident;
 my $command;
 
-initialize_counters( $config, \%input );
+initialize_counters( $config, \%input, \@ondeck );
 
 setlog( $config->{LOGFILE}, $config->{debuglevel} );
 
@@ -112,7 +112,8 @@ while ( $rj || $ri ) {
 		close $new_sock;
 	}
 	check_timeouts();
-	flush_output();
+	flush_output() if ( time > $next_flush );
+	
 	$rj=remaining_jobs();
 	$ri=remaining_inputs();
 #	printf STDERR "DEBUG: $rj $ri\n";
@@ -126,7 +127,7 @@ while ( $rj || $ri ) {
 finalize_jobs();
 
 INFO("Doing final flush");
-flush_output(1);
+flush_output();
 close_all();
 INFO("All done");
 writeline( $config->{DONEFILE}, "done" ) if (failed_jobs() eq 0);
@@ -136,12 +137,12 @@ closelog();
 #
 sub catch_int {
 	my $signame = shift;
-	print stderr "Caught signal $signame ($shutdown)\n";
+#	print stderr "Caught signal $signame (shutdown=$shutdown)\n";
 	sleep 10 if $shutdown eq 2;
 	if ($shutdown) {
 		flush_output();
 		close_all();
-		ERROR("Exiting");
+		ERROR("Exiting on signal $signame");
 		closelog();
 		exit;
 	}
@@ -226,9 +227,9 @@ sub do_request {
 				my $status = process_job( $jstep, $ident, $bytes );
 			}
 			elsif ( !$success && isajob($jstep) ) {
-				ERROR("Job step $jstep");
+				ERROR("Processing job step $jstep");
 				print $sock "RECEIVED $jstep\n";
-				increment_error();
+				increment_errors();
 				requeue_job($jstep);
 			}
 			else {
@@ -278,9 +279,9 @@ sub do_request {
 		}
 		elsif (/^ERROR /) {
 			my ( $command, $jstep ) = split;
-			ERROR("Job step $jstep");
+			ERROR("Job step $jstep exited with an error");
 			print $sock "RECEIVED $jstep\n";
-			increment_error();
+			increment_errors();
 			requeue_job($jstep);
 		}
 		else {
@@ -344,6 +345,7 @@ sub send_work {
 	}
 	# If no work then send a shutdown
 	else {
+		DEBUG("send_work says SHUTDOWN");
 		$buffer = "SHUTDOWN";
 	}
 	return $buffer;
@@ -353,9 +355,7 @@ sub send_work {
 # This tries to keep everything in a consistent state.
 #
 sub flush_output {
-	my $force = shift;
 	
-	return unless ( time > $next_flush || defined $force );
 	#|| $buffer_size > $config->{MAXBUFF} );
 	
 	DEBUG("Flush called");
@@ -389,12 +389,12 @@ sub flush_output {
 	}
 
   update_status('completed',@buffered);
-#	map { $input{$_}->{status} = 'completed' } @buffered;
 	@buffered = ();
 	flushprogress();
 
 	my $ct = write_fastrecovery( $config->{FR_FILE}, \%input, 1 );
 	DEBUG("Wrote fast recovery ($ct items)");
+	DEBUG("Next flush in $config->{FLUSHTIME} seconds");
 	$next_flush = time + $config->{FLUSHTIME};
 }
 

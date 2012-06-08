@@ -5,44 +5,65 @@
 #########################
 
 # Client Piece
-if (scalar (@ARGV) > 0 ){
+if ( scalar(@ARGV) > 0 ) {
 	my $line;
-  while(<STDIN>){
-     $line++;
-  }
-  print "$line\n";
-  open AO, "> $ENV{ARG_OUT}";
-  foreach (@ARGV){
-  	print AO "$_\n";
-  }
-  exit;
+	while (<STDIN>) {
+		$line++;
+	}
+	print "$line\n";
+	open AO, "> $ENV{ARG_OUT}";
+	foreach (@ARGV) {
+		print AO "$_\n";
+	}
+	exit;
 }
 
-
-use Test::More tests => 3;
+use Test::More tests => 7;
 
 BEGIN { use_ok('NERSC::TaskFarmer::Tester') }
 
 #########################
+setup_test();
 
-$ENV{TF_HOME}="./blib";
-$ENV{NERSC_HOST}="test";
 
-my $pwd=`pwd`;
-chomp $pwd;
+my $pwd=qx 'pwd';
+chomp($pwd);
+my $TFILE  = "test.faa";
+my $IFILE  = "./testing/$TFILE";
+my $PFILE  = "$pwd/progress.$TFILE";
+my $FR     = "$pwd/fastrecovery.$TFILE";
+my $DONE   = "$pwd/done.$TFILE";
+my $TR     = "$pwd/blib/script/tfrun";
+my $TESTER = "$pwd/t/tester.sh";
 
-$ENV{TF_POLLTIME}=0.001;
-$ENV{ARG_OUT}="$pwd/test.args";
-
-my $TFILE = "./testing/test.faa";
-my $PFILE = "./progress.test.faa";
-my $ME="$pwd/$0";
-
-# Run server
-print STDERR qx "./blib/script/tfrun --tfdebuglevel=3 --tfbatchsize=32 -i $TFILE $pwd/t/args.sh arg1 arg2 'a b' > test.out 2> test.err";
-
-ok(-e "./test.args", "Args test");
-ok(checklines($TFILE,$PFILE) eq 1, "Check Output");
+$ENV{FR}   = $FR;
 
 cleanup_tests();
+
+# Run server
+$ENV{ARG_OUT}     = "$pwd/test.args";
+$ENV{THREADS} = 4;
+qx "$TR -i $IFILE $TESTER arg1 arg2 'a b' > test.out 2> test.err";
+
+ok( -e "./test.args", "Args test" );
+ok( checklines( $IFILE, $PFILE ) eq 1, "Check Output" );
+delete $ENV{ARG_OUT};
+
+cleanup_tests();
+
+print "Batchbytes Test\n";
+qx "$TR --tfdebuglevel=3 --tfbatchbytes=800 -i $IFILE $TESTER arg1 > test.out 2> test.err";
+printf "PL: %d\n", countlines($PFILE);
+ok( $? eq 0, "Batchtypes ran clean" );
+ok( countlines($PFILE) > 100, 'Batchbytes yields smaller chunks' );
+ok( checklines( $IFILE, $PFILE ) eq 1, "Check output batchbytes" );
+
+cleanup_tests();
+
+print "Error Test\n";
+$ENV{ERRORSTEP} = 2;
+qx "$TR --tfdebuglevel=5 -i $IFILE $TESTER arg1 > test.out 2> test.err";
+ok( checklines( $IFILE, $PFILE ) eq 1, "Error Test: Check Output" );
+
+#cleanup_tests();
 

@@ -237,7 +237,7 @@ sub flushprogress {
 # Move to retry queue
 #
 sub check_timeouts {
-	DEBUG("Checking timeouts");
+	DEBUG("Entered check_timeouts");
 	if ( time > $next_status ) {
 		update_counters( \%job, 0);
 		$last_status=time;
@@ -245,6 +245,7 @@ sub check_timeouts {
 	}
 	delete_olddata();
 	return unless ( time > $next_check );
+	DEBUG("Checking for timed out jobs");
 	foreach my $jstep ( keys %job ) {
 		next if $job{$jstep}->{finish};
 		my $retry = 0;
@@ -266,7 +267,7 @@ sub check_timeouts {
 #
 sub requeue_job {
 	my $jstep = shift;
-
+  DEBUG("Requeue $jstep");
 	foreach my $inputid ( @{ $job{$jstep}->{list} } ) {		
 		$input->{$inputid}->{retry}++;
 		DEBUG( sprintf "Retrying %s for %d time",

@@ -26,35 +26,51 @@ our %EXPORT_TAGS = (
 our @EXPORT_OK = ( @{ $EXPORT_TAGS{'all'} } );
 
 our @EXPORT = qw(
+	setup_test
 	cleanup_tests
 	checklines
+	countlines
+	difffiles
 );
 
-sub wc {
-	if (-e "/usr/bin/wc"){
-		return "/usr/bin/wc";
+sub setup_test {
+	my $pwd = `pwd`;
+	chomp $pwd;
+
+	$ENV{TF_HOME}     = "$pwd/blib";
+	$ENV{NERSC_HOST}  = "test";
+	$ENV{TF_POLLTIME} = 0.00001;
+
+}
+
+sub countlines {
+	my $pfile = shift;
+	my $plines;
+	open( P, $pfile ) or return 0;
+	while (<P>) {
+		$plines++;
 	}
-	else{
-		return "/bin/wc";
-	}
+	close P;
+	return $plines;
 }
 
 sub checklines {
-  my $tfile=shift;
-  my $pfile=shift;
-  my $plines;
-  my $elines;
-  open(P,$pfile) or return 0;
-  while(<P>){
-    my @e=split /,/,$_;
-    $plines+=scalar @e;
-  }
-  open(I,$tfile);
-  while(<I>){
-  	$elines++ if /^>/;
-  }
-  print "p: $plines $elines\n";
-  return ($plines eq $elines);
+	my $tfile = shift;
+	my $pfile = shift;
+	my $plines=0;
+	my $elines=0;
+	open( P, $pfile ) or return 0;
+	while (<P>) {
+		my @e = split /,/, $_;
+		$plines += scalar @e;
+	}
+	open( I, $tfile );
+	while (<I>) {
+		$elines++ if /^>/;
+	}
+	close I;
+	print "p: $plines $elines\n";
+	return ( $plines eq $elines );
 }
 
 sub cleanup_tests {
@@ -67,6 +83,21 @@ sub cleanup_tests {
 	{
 		unlink $_;
 	}
+}
+
+sub difffiles {
+	my $f1=shift;
+	my $f2=shift;
+	open(F1,$f1);
+	open(F2,$f2);
+	while(my $l1=<F1>){
+		my $l2=<F2>;
+		return 0 if $l1 ne $l2;
+	}
+	my $rem=<F2>;
+	return 0 if defined $rem;
+	return 1;
+	
 }
 1;
 __END__

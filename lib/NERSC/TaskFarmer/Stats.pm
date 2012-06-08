@@ -7,6 +7,7 @@ use warnings;
 require Exporter;
 
 our @ISA = qw(Exporter);
+use NERSC::TaskFarmer::Log;
 
 # Items to export into callers namespace by default. Note: do not export
 # names by default without a very good reason. Use EXPORT_OK instead.
@@ -51,9 +52,11 @@ sub initialize_counters {
 	$counters->{size}   = NERSC::TaskFarmer::Reader::getsize();
   $counters->{start_time} = time;
   $counters->{last_update} = 0;
+  $counters->{errors} = 0;
+  $counters->{timeout} = 0;
 }
 
-sub increment_errors{
+sub increment_errors {
 	$counters->{errors}++;
 }
 

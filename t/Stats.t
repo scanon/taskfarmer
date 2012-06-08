@@ -7,6 +7,8 @@ use Test::More tests => 1;
 use IO::File;
 
 BEGIN { use_ok('NERSC::TaskFarmer::Stats') };
+use NERSC::TaskFarmer::Config;
+use NERSC::TaskFarmer::Reader;
 
 #########################
 
@@ -15,5 +17,29 @@ BEGIN { use_ok('NERSC::TaskFarmer::Stats') };
 my $sfile="stats.log";
 
 unlink $sfile if ( -e $sfile);
+
+my $config = initialize_conf();
+
+#  Global vars
+#
+
+# shared
+my %input;
+my %output;
+my %scratchbuffer;
+
+# These become thread queues
+my @ondeck;
+
+#my @failed;
+my @buffered;
+
+$config->{INPUT}="./testing/test.faa";
+init_read($config, \%input);
+
+initialize_counters( $config, \%input, \@ondeck );
+
+increment_errors();
+
 
 unlink ($sfile) if ( -e $sfile);
