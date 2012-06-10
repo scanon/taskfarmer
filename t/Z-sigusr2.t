@@ -1,12 +1,13 @@
 #!/usr/bin/perl
 #
-# Test a recovery stuff
+# Simulates a dropped file
 #
 #########################
 
 use Test::More tests => 2;
 
 BEGIN { use_ok('NERSC::TaskFarmer::Tester') }
+use Config;
 
 #########################
 setup_test();
@@ -21,18 +22,23 @@ my $FR     = "$pwd/fastrecovery.$TFILE";
 my $DONE   = "$pwd/done.$TFILE";
 my $TR     = "$pwd/blib/script/tfrun";
 my $TESTER = "$pwd/t/tester.sh";
+my $pidfile="$pwd/tf.pid";
 
-$ENV{FR} = $FR;
-
-# Test that server stops with a new recovery file
-#
 cleanup_tests();
-open(FR,"> $FR");
-print FR "bogus\n";
-close FR;
-qx "$TR --tfheartbeat=4 --tfdebuglevel=5 -i $IFILE $TESTER arg1 > test.out 2> test.err";
 
-ok(countstring('test.err','too new'), 'Server does not start with new fastrecovery');
+$ENV{THREADS}    = 1;
+$ENV{SERVER_ONLY} = 1;
+$pid=fork();
+if ($pid eq 0){
+	qx "$TR --tfpidfile=$pidfile --tfheartbeat=4 --tfdebuglevel=5 -i $IFILE $TESTER arg1 > test.out 2> test.err";
+	exit;
+}
+sleep 2;
 
+kill USR2, qx "cat $pidfile";
+
+sleep 1;
+ok(countstring('test.err','Dump'),'USR2 generated dump');
+unlink $pidfile;
 cleanup_tests();
 

@@ -31,6 +31,8 @@ our @EXPORT = qw(
 	checklines
 	countlines
 	difffiles
+	countstring
+	sendmess
 );
 
 sub setup_test {
@@ -55,10 +57,10 @@ sub countlines {
 }
 
 sub checklines {
-	my $tfile = shift;
-	my $pfile = shift;
-	my $plines=0;
-	my $elines=0;
+	my $tfile  = shift;
+	my $pfile  = shift;
+	my $plines = 0;
+	my $elines = 0;
 	open( P, $pfile ) or return 0;
 	while (<P>) {
 		my @e = split /,/, $_;
@@ -86,19 +88,47 @@ sub cleanup_tests {
 }
 
 sub difffiles {
-	my $f1=shift;
-	my $f2=shift;
-	open(F1,$f1);
-	open(F2,$f2);
-	while(my $l1=<F1>){
-		my $l2=<F2>;
+	my $f1 = shift;
+	my $f2 = shift;
+	open( F1, $f1 );
+	open( F2, $f2 );
+	while ( my $l1 = <F1> ) {
+		my $l2 = <F2>;
 		return 0 if $l1 ne $l2;
 	}
-	my $rem=<F2>;
+	my $rem = <F2>;
 	return 0 if defined $rem;
 	return 1;
-	
+
 }
+
+sub countstring {
+	my $file   = shift;
+	my $string = shift;
+	my $ct;
+
+	open( F, $file ) or die "Unable to open $file";
+	while (<F>) {
+		$ct++ if /$string/;
+	}
+	return $ct;
+}
+
+sub sendmess {
+	my $server = shift;
+	my $port = shift;
+	my $message = shift;
+	
+	my $sock = IO::Socket::INET->new(
+		PeerAddr => $server,
+		PeerPort => $port,
+		Proto    => 'tcp'
+	) or die "Unable to open Socket";
+	print $sock $message;
+	close $sock;
+
+}
+
 1;
 __END__
 

@@ -20,9 +20,22 @@ elif [ ! -z "$KILLSTEP" ] && [ "$STEP" = "$KILLSTEP" ] ; then
     done
     PID=$(cat $PIDFILE)
     echo "Kill parent $PID"
-    kill -9 $(ps -p $PID -o ppid|tail -1)
+    kill -9 $(ps -p $PID -o ppid|tail -1) 2>&/dev/null
     kill -9 $PID
     exit 1
+elif [ ! -z $NOLINE ] ; then
+  echo -n "blah"
+  exit
+fi
+
+if [ ! -z $TESTFILE ] ; then
+  [ -e $TESTFILE ] && rm $TESTFILE
+  if [ "$STEP" = "1" ] ; then
+    touch $TESTFILE 
+    if [ "$TESTFILE" = "skipfile" ] ; then
+      touch blah;
+    fi
+  fi
 fi
 
 if [ ! -z "$ARG_OUT" ] ; then

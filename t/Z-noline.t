@@ -1,6 +1,6 @@
 #!/usr/bin/perl
 #
-# Test a recovery stuff
+# Simulates a dropped file
 #
 #########################
 
@@ -24,15 +24,12 @@ my $TESTER = "$pwd/t/tester.sh";
 
 $ENV{FR} = $FR;
 
-# Test that server stops with a new recovery file
-#
 cleanup_tests();
-open(FR,"> $FR");
-print FR "bogus\n";
-close FR;
+
+$ENV{THREADS}    = 1;
+$ENV{NOLINE} = "1";
 qx "$TR --tfheartbeat=4 --tfdebuglevel=5 -i $IFILE $TESTER arg1 > test.out 2> test.err";
 
-ok(countstring('test.err','too new'), 'Server does not start with new fastrecovery');
-
+ok( -e $DONE, 'Client Timeout - Finished' );
 cleanup_tests();
 
