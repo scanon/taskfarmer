@@ -14,12 +14,10 @@ setup_test();
 my $pwd = qx 'pwd';
 chomp($pwd);
 my $TFILE  = "test.faa";
-my $IFILE  = "./testing/$TFILE";
+my $IFILE  = "./t/$TFILE";
 my $DONE   = "$pwd/done.$TFILE";
 my $TR     = "$pwd/blib/script/tfrun";
 my $TESTER = "$pwd/t/tester.sh";
-
-$ENV{FR} = $FR;
 
 cleanup_tests();
 

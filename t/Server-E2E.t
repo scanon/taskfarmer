@@ -29,7 +29,7 @@ setup_test();
 my $pwd=qx 'pwd';
 chomp($pwd);
 my $TFILE  = "test.faa";
-my $IFILE  = "./testing/$TFILE";
+my $IFILE  = "./t/$TFILE";
 my $PFILE  = "$pwd/progress.$TFILE";
 my $FR     = "$pwd/fastrecovery.$TFILE";
 my $DONE   = "$pwd/done.$TFILE";

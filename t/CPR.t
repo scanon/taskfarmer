@@ -17,7 +17,7 @@ BEGIN { use_ok('NERSC::TaskFarmer::CPR') };
 # its man page ( perldoc Test::More ) for help writing this test script.
 
 # Create some fake state
-my $inputfile="testing/test.faa";
+my $inputfile="t/test.faa";
 my $fr="fr.test.faa";
 my %input;
 my $ct=32;

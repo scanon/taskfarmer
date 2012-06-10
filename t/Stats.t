@@ -34,7 +34,7 @@ my @ondeck;
 #my @failed;
 my @buffered;
 
-$config->{INPUT}="./testing/test.faa";
+$config->{INPUT}="./t/test.faa";
 init_read($config, \%input);
 
 initialize_counters( $config, \%input, \@ondeck );

@@ -12,7 +12,7 @@ BEGIN { use_ok('NERSC::TaskFarmer::Jobs') }
 #########################
 
 push @ARGV, '--tfbatchsize=1';
-push @ARGV, ( '-i', 'testing/test.faa' );
+push @ARGV, ( '-i', 't/test.faa' );
 my $config = initialize_conf();
 my @buf;
 my @od;

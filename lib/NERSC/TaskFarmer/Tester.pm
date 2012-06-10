@@ -77,13 +77,18 @@ sub checklines {
 
 sub cleanup_tests {
 	foreach $_ (
-		"done.test.faa",         "progress.test.faa",
-		"fastrecovery.test.faa", "log.test.faa",
-		"test.args",             "test.out",
-		"test.err"
+		"done.test.faa",          "progress.test.faa",
+		"fastrecovery.test.faa",  "log.test.faa",
+		"progress.test.faa","progress.test2.faa",
+		"test.args",              "tf.pid",
+		"test.out",               "test.err",
+		"test2.err",              "test2.out",
+		"fastrecovery.test2.faa", "log.test2.faa",
+		"client.out",             "client.err",
+		"client2.out",            "client2.err",
 		)
 	{
-		unlink $_;
+		unlink $_ if ( -e $_ );
 	}
 }
 
@@ -115,15 +120,16 @@ sub countstring {
 }
 
 sub sendmess {
-	my $server = shift;
-	my $port = shift;
+	my $server  = shift;
+	my $port    = shift;
 	my $message = shift;
-	
+
 	my $sock = IO::Socket::INET->new(
 		PeerAddr => $server,
 		PeerPort => $port,
 		Proto    => 'tcp'
-	) or die "Unable to open Socket";
+		)
+		or die "Unable to open Socket";
 	print $sock $message;
 	close $sock;
 
