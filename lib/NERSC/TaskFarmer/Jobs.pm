@@ -11,6 +11,7 @@ require Exporter;
 use NERSC::TaskFarmer::Log;
 use NERSC::TaskFarmer::Reader;
 use NERSC::TaskFarmer::Stats;
+use NERSC::TaskFarmer::Output;
 
 our @ISA = qw(Exporter);
 
@@ -36,48 +37,37 @@ our @EXPORT = qw(
 	process_job
 	isajob
 	queue_job
-	remaining_inputs
+	get_job_inputs
 	remaining_jobs
-	flushprogress
 	check_timeouts
+	ondeck
 	requeue_job
-	failed_jobs
 	update_job_stats
 	delete_olddata
 	finalize_jobs
-	);
+);
 
 our $VERSION = '0.01';
 our %job;
-our $input;
-our $output;
-our @failed;
 our $ondeck;
-our $buffered;
-our $scratchbuffer;
 our $processed = 0;
-our $progress_buffer = "";
-our $item = 0;
+our $item      = 0;
 our $config;
 our $next_check;
 our $next_status;
 our $last_status = 0;
 our $pf;
 our $chunksize;
+our $progfile;
 
 sub initialize_jobs {
-	$input    = shift;
-	$config   = shift;
-	$buffered = shift;
-	$ondeck   = shift;
-	$scratchbuffer = shift;
-	$output = shift;
+	$config        = shift;
+	$ondeck        = [];
 
 	$next_check  = time + $config->{POLLTIME};
 	$next_status = time + $config->{FLUSHTIME};
 	if ( defined $config->{PROGRESSFILE} ) {
-		$pf = new IO::File ">> $config->{PROGRESSFILE}"
-			or die "Unable to open progress file\n";
+		$progfile = $config->{PROGRESSFILE};
 	}
 	$chunksize = 2 * $config->{BATCHSIZE};
 
@@ -92,22 +82,20 @@ sub process_job {
 	my $jstep = shift;
 	my $ident = shift;
 	my $bytes = shift;
+	my $scratchbuffer = shift;
 
 	return 0 unless defined( $job{$jstep} );
 	$job{$jstep}->{bytesout} = $bytes;
 
 	# Copy data from scratch buffer
 	#
-	foreach my $file ( keys %{$scratchbuffer} ) {
-		DEBUG("Copying $file to buffer");
-		$output->{$file}->{buffer} .= $scratchbuffer->{$file};
-	}
 	my $inputs = join ",", @{ $job{$jstep}->{list} };
 	my $rtime = time - $job{$jstep}->{start};
 	$job{$jstep}->{time}   = $rtime;
 	$job{$jstep}->{finish} = time;
-	$progress_buffer .= sprintf "%s %s %d %d %d %d\n", $inputs,
+	$scratchbuffer->{$progfile} = sprintf "%s %s %d %d %d %d\n", $inputs,
 		$job{$jstep}->{ident}, $rtime, 0, time, $job{$jstep}->{bytesin};
+	buffer_output($job{$jstep}->{list},$scratchbuffer);
 	INFO(
 		sprintf "Recv: %d input:%25s hostid:%-10s  time:%-4ds lines: %-6d proc: %d",
 		$jstep,
@@ -118,11 +106,10 @@ sub process_job {
 		$processed
 	);
 
-  push @{$buffered},update_status('buffered',@{ $job{$jstep}->{list} });
-#	foreach my $inputid (  ) {
-#		$input->{$inputid}->{status} = 'buffered';
-#		push @{$buffered}, $inputid;
-#	}
+	#	foreach my $inputid (  ) {
+	#		$input->{$inputid}->{status} = 'buffered';
+	#		push @{$buffered}, $inputid;
+	#	}
 	$processed += $job{$jstep}->{count};
 
 	#    delete $job{$jstep};
@@ -132,49 +119,33 @@ sub process_job {
 #
 # This builds up a work list of args inputs.
 # It will read in more input if there isn't enough ondeck.
+# Then it will create a job for the list.
 #
-sub build_list {
+sub queue_job {
+	my $ident = shift;
 	my @list;
-	my @tlist;
-	my $ct    = 0;
-	my $bytes = 0;
+	my $length = 0;
+	my $ct     = 0;
+	my $bytes =0;
+	
 
-	# Build rest from ondeck
-	#
 	if ( scalar @{$ondeck} < ( $config->{BATCHSIZE} ) ) {
-		@tlist = NERSC::TaskFarmer::Reader::read_input($chunksize);
-		push @{$ondeck}, @tlist;
+		push @{$ondeck}, read_input($chunksize);
 	}
 	while ( $ct < $config->{BATCHSIZE} && scalar @{$ondeck} > 0 ) {
 		my $id = shift @{$ondeck};
 		push @list, $id;
-		die "Bad Input ID $id\n" unless defined $input->{$id};
-		$bytes += length( $input->{$id}->{input} );
+		die "Bad Input ID $id\n" unless isainput($id);
+		$bytes += inputlength( $id);
 		$ct++;
 		last if ( $config->{BATCHBYTES} > 0 && $bytes > $config->{BATCHBYTES} );
 	}
-	return @list;
-}
-
-sub queue_job {
-	my $ident = shift;
-
-	my @list = build_list();
-	my $sent = [];
-	my $length = 0;
-	my $ct = 0;
-
+	
 	# Send the list if there is one.
 	#
 	if ( scalar @list > 0 ) {
 		my $jid = $item;
-		foreach my $inputid (@list) {
-			$input->{$inputid}->{status} = 'in progress';
-			push @{$sent}, $inputid;
-			die "Bad input $inputid" unless defined $input->{$inputid}->{input};
-			$length += length $input->{$inputid}->{input};
-			$ct++;
-		}
+		update_status('in progress',@list);
 
 		# Save info about the job step.
 		#
@@ -182,18 +153,27 @@ sub queue_job {
 		$job{$jid}->{start}         = time;
 		$job{$jid}->{finish}        = 0;
 		$job{$jid}->{time}          = 0;
-		$job{$jid}->{bytesin}       = $length;
-		$job{$jid}->{list}          = $sent;
+		$job{$jid}->{bytesin}       = $bytes;
+		$job{$jid}->{list}          = \@list;
 		$job{$jid}->{count}         = $ct;
 		$job{$jid}->{ident}         = $ident;
 		$job{$jid}->{lastheartbeat} = time;
+		$job{$jid}->{length}				= 0;
 		$item++;
-		
+
 		return $job{$jid};
 	}
 	else {
 		return undef;
 	}
+}
+
+sub ondeck {
+	push @{$ondeck}, @_
+}
+sub get_job_inputs {
+	my $jstep = shift;
+	return get_input_data( @{ $job{$jstep}->{list} } );
 }
 
 sub isajob {
@@ -207,30 +187,15 @@ sub isajob {
 	}
 }
 
-sub remaining_inputs {
-	return 1 if (! endoffile())	;
-	foreach (keys %{$input}){
-		my $s=$input->{$_}->{status};
-		return 1 if ($s ne 'completed' && $s ne 'failed' && $s ne 'buffered');
-	}
-	return 0;
-}
-
 sub remaining_jobs {
 	my $c = 0;
 	foreach my $jid ( keys %job ) {
-		next if $job{$jid}->{finish}>0;
+		next if $job{$jid}->{finish} > 0;
 		$c++;
 	}
 
 	#	print stderr "Remaining jobs: $c\n";
 	return $c;
-}
-
-sub flushprogress {
-	print $pf $progress_buffer;
-	flush $pf;
-	$progress_buffer = '';
 }
 
 # Look for old inflight messages.
@@ -239,8 +204,8 @@ sub flushprogress {
 sub check_timeouts {
 	DEBUG("Entered check_timeouts");
 	if ( time > $next_status ) {
-		update_counters( \%job, 0);
-		$last_status=time;
+		update_counters( \%job, 0 );
+		$last_status = time;
 		$next_status = time + $config->{FLUSHTIME};
 	}
 	delete_olddata();
@@ -267,25 +232,9 @@ sub check_timeouts {
 #
 sub requeue_job {
 	my $jstep = shift;
-  DEBUG("Requeue $jstep");
-	foreach my $inputid ( @{ $job{$jstep}->{list} } ) {		
-		$input->{$inputid}->{retry}++;
-		DEBUG( sprintf "Retrying %s for %d time",
-			$inputid, $input->{$inputid}->{retry} );
-		if ( $input->{$inputid}->{retry} < $config->{MAXRETRY} ) {
-			unshift @{$ondeck}, $inputid;
-			$input->{$inputid}->{status} = 'retry';
-		}
-		else {
-			ERROR("$inputid hit max retries");
-			push @failed, $inputid;
-		}
-	}
+	DEBUG("Requeue $jstep");
+	unshift @{$ondeck}, retry_inputs( @{ $job{$jstep}->{list} } );
 	delete $job{$jstep};
-}
-
-sub failed_jobs {
-	return scalar(@failed);
 }
 
 sub update_job_stats {
@@ -301,6 +250,7 @@ sub update_job_stats {
 sub delete_olddata {
 	my $ct;
 	foreach my $jid ( keys %job ) {
+		die "Bad id $jid" if (! defined $job{$jid}->{finish});
 		next unless $job{$jid}->{finish} > 0;
 		delete $job{$jid} if $job{$jid}->{finish} < $last_status;
 		$ct++;
@@ -309,7 +259,8 @@ sub delete_olddata {
 }
 
 sub finalize_jobs {
-	flushprogress();
+	flush_output();
+
 	#Let's do this somewhere else.  May in CPR.
 	#NERSC::TaskFarmer::Reader::check_inputs( @{$ondeck} );
 

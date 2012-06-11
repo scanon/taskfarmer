@@ -1,22 +1,15 @@
 package NERSC::TaskFarmer::Reader;
 
-# TODO Move all input access into Reader
-
 use 5.010000;
 use strict;
 use warnings;
+
+use NERSC::TaskFarmer::Log;
 
 require Exporter;
 
 our @ISA = qw(Exporter);
 
-# Items to export into callers namespace by default. Note: do not export
-# names by default without a very good reason. Use EXPORT_OK instead.
-# Do not simply export all your public functions/methods/constants.
-
-# This allows declaration	use NERSC::TaskFarmer::Reader ':all';
-# If you do not need this, moving things directly into @EXPORT or @EXPORT_OK
-# will save memory.
 our %EXPORT_TAGS = (
 	'all' => [
 		qw(
@@ -31,11 +24,18 @@ our @EXPORT = qw(
 	init_read
 	read_input
 	check_inputs
+	remaining_inputs
+	pending_inputs
+	retry_inputs
+	failed_inputs
+	isainput
+	inputlength
 	get_inputs
+	get_input_data
 	update_status
+	get_status
 	getpos
 	setpos
-	endoffile
 );
 
 our $VERSION = '0.01';
@@ -44,19 +44,21 @@ our $inputf;
 our $size;
 our $config;
 our $input;
+our @failed;
+our $maxretry=8;
 
 sub init_read {
 	$config = shift;
-	$input = shift;
+	$input = {};
 	my $file   = $config->{INPUT};
 	$inputf = new IO::File $file
 		or die "Unable to open input file ($file)\n";
 	my @stati = stat $inputf;
 	$size = $stati[7];
+	$maxretry=$config->{MAXRETRY};
 
 }
 
-# Preloaded methods go here.
 #
 #
 # Read in $read number of inputs from $in.
@@ -93,10 +95,12 @@ sub read_input {
 			$input->{$id}->{offset} = $id;
 			$input->{$id}->{index}  = $index;
 			$input->{$id}->{status} = 'ondeck';
+			$input->{$id}->{length} = length($_);
 			push @list, $id;
 		}
 		else {
 			$input->{$id}->{input} .= $_;
+			$input->{$id}->{length}+=length($_);
 		}
 		$l++;
 	}
@@ -117,7 +121,54 @@ sub check_inputs {
 	}
 }
 
+sub failed_inputs {
+	return scalar @failed;
+}
+
+sub retry_inputs {
+  my @list;
+  
+	foreach my $inputid ( @_ ) {		
+		$input->{$inputid}->{retry}++;
+		DEBUG( sprintf "Retrying %s for %d time",
+			$inputid, $input->{$inputid}->{retry} );
+		if ( $input->{$inputid}->{retry} < $maxretry ) {
+			push @list, $inputid;
+			$input->{$inputid}->{status} = 'retry';
+		}
+		else {
+			ERROR("$inputid hit max retries");
+			push @failed, $inputid;
+		}
+	}
+	return @list;
+}
+
+sub pending_inputs {
+	my @list;
+	
+		for my $inputid ( sort { $a <=> $b } keys %{$input} ) {
+		if ( $input->{$inputid}->{status} ne 'completed' ) {
+			push @list, $input->{$inputid}->{offset};
+		}
+	}
+	return @list
+}
+
+sub remaining_inputs {
+	return 1 if (! eof($inputf))	;
+	# TODO Replace this with a set of counters to avoid the loop
+	foreach (keys %{$input}){
+		my $s=$input->{$_}->{status};
+		return 1 if ($s ne 'completed' && $s ne 'failed' && $s ne 'buffered');
+	}
+	return 0;
+}
+
 sub get_inputs {
+	return $input;
+}
+sub get_input_data {
 	my $buffer;
 	foreach my $inputid (@_) {
 		$buffer .= $input->{$inputid}->{input};
@@ -125,10 +176,27 @@ sub get_inputs {
 	return $buffer;
 }
 
+sub isainput {
+	my $id = shift;
+	return defined $input->{$id};
+}
+
+sub inputlength{
+	my $id = shift;
+	return undef if (! defined $input->{$id});
+	return $input->{$id}->{length};
+}
+
 sub update_status {
 	my $state=shift;
 	map { $input->{$_}->{status} = $state } @_;
 	return @_;
+}
+
+sub get_status {
+	my $id = shift;
+	return undef if (! defined $input->{$id});
+	return $input->{$id}->{status};
 }
 
 sub cleanup_oldinputs {
@@ -153,10 +221,10 @@ sub getsize {
 	return $size;
 }
 
-sub endoffile {
-	return 1 if ( !defined $inputf );
-	return eof($inputf);
-}
+#sub endoffile {
+#	return 1 if ( !defined $inputf );
+#	return eof($inputf);
+#}
 
 1;
 __END__

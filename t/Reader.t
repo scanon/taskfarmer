@@ -16,17 +16,20 @@ BEGIN { use_ok('NERSC::TaskFarmer::Reader') };
 # its man page ( perldoc Test::More ) for help writing this test script.
 my $inputfile="t/test.faa";
 my $config->{INPUT}=$inputfile;
-my %input;
+$config->{MAXRETRY}=2;
 
-init_read($config,\%input);
+init_read($config);
 my $ct=32;
 read_input($ct);
+my $input=get_inputs();
 
-ok(scalar(keys %input) eq $ct, 'read_input');
+ok(scalar(keys %{$input}) eq $ct, 'read_input');
 
 # Change State
-my @list=keys %input;
+my @list=keys %{$input};
 update_status('buffered',@list);
 
 my $id=shift @list;
-ok($input{$id}->{status} eq 'buffered','Change state test');
+ok(get_status($id) eq 'buffered','Change state test');
+
+retry_inputs(($id));

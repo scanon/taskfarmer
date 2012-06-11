@@ -47,7 +47,7 @@ print "Now lets try to finish up\n";
 utime 0,0, $FR;
 qx "$TR --tfbatchsize=32 --tfdebuglevel=5 --tfpidfile $pidfile -i $IFILE $TESTER arg1 >> test.out 2>> test.err";
 ok( -e $DONE, "Finished recovery.");
-ok( difffiles($IFILE,'test.out'));
+ok( difffiles($IFILE,'test.out'), 'Output is correct after a recovery');
 
 cleanup_tests();
 

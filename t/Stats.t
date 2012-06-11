@@ -23,21 +23,10 @@ my $config = initialize_conf();
 #  Global vars
 #
 
-# shared
-my %input;
-my %output;
-my %scratchbuffer;
-
-# These become thread queues
-my @ondeck;
-
-#my @failed;
-my @buffered;
-
 $config->{INPUT}="./t/test.faa";
-init_read($config, \%input);
+init_read($config);
 
-initialize_counters( $config, \%input, \@ondeck );
+initialize_counters( $config );
 
 increment_errors();
 

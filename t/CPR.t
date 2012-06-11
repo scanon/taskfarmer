@@ -19,23 +19,22 @@ BEGIN { use_ok('NERSC::TaskFarmer::CPR') };
 # Create some fake state
 my $inputfile="t/test.faa";
 my $fr="fr.test.faa";
-my %input;
 my $ct=32;
 my @q;
 my $config->{INPUT}=$inputfile;
 
-init_read($config,\%input);
+init_read($config);
 push @q,read_input($ct);
+my $in1=get_inputs();
 
-ok(write_fastrecovery($fr,\%input) eq $ct, 'write recovery test');
-
-my %input2;
-init_read($config,\%input2);
-my @q2=read_fastrecovery($fr,\%input2);
+ok(write_fastrecovery($fr) eq $ct, 'write recovery test');
+init_read($config);
+my $in2=get_inputs();
+my @q2=read_fastrecovery($fr);
 
 ok(scalar @q eq scalar @q2, 'recovery test');
 my $t1=$q[0];
 
-ok($input{$t1}->{offset} eq $input2{$t1}->{offset}, 'test recovery inputs');
+ok($in1->{$t1}->{offset} eq $in2->{$t1}->{offset}, 'test recovery inputs');
 
 unlink($fr) if (-e $fr);;

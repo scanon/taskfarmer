@@ -8,6 +8,7 @@ require Exporter;
 
 our @ISA = qw(Exporter);
 use NERSC::TaskFarmer::Log;
+use NERSC::TaskFarmer::Reader;
 
 # Items to export into callers namespace by default. Note: do not export
 # names by default without a very good reason. Use EXPORT_OK instead.
@@ -34,13 +35,11 @@ our $VERSION = '0.01';
 our $counters;
 our $statusfile;
 our $inputs;
-our $ondeck;
 our $config;
 
 sub initialize_counters {
 	$config = shift;
-	$inputs  = shift;
-	$ondeck = shift;
+	$inputs  = get_inputs();
 	
 	my $size = shift;
 	my $statusfile=$config->{STATUSFILE};
@@ -57,6 +56,7 @@ sub initialize_counters {
 }
 
 sub increment_errors {
+	DEBUG("increment error");
 	$counters->{errors}++;
 }
 
@@ -67,11 +67,12 @@ sub increment_timeouts{
 sub update_counters {
 	my $jobs = shift;
 	my $bytesin = shift;
+	my $ondeck = shift;
 	my $output;
 	my $tss = time - $counters->{start_time};
 
 	$counters->{bytesin} = $bytesin;
-	$counters->{ondeck}  = scalar @{$ondeck};
+	$counters->{ondeck}  = $ondeck;
 
 	# Initialize epochs
 	my $epoch = int( $tss / ( $counters->{quantum} ) );

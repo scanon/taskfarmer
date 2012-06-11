@@ -41,17 +41,16 @@ our $VERSION = '0.01';
 # be running .
 #
 sub check_recovery_age {
-	my $config = shift;	
-	my @stat   = stat($config->{FR_FILE});
-	return 1 if ! defined $stat[9];
-	
-	my $age    = time() - $stat[9];
+	my $config = shift;
+	my @stat   = stat( $config->{FR_FILE} );
+	return 1 if !defined $stat[9];
+
+	my $age = time() - $stat[9];
 	if ( $age < $config->{FLUSHTIME} ) {
 		return 0;
 	}
 	return 1;
 }
-
 
 #
 # Read fast recovery file
@@ -60,7 +59,6 @@ sub check_recovery_age {
 #
 sub read_fastrecovery {
 	my $filename = shift;
-	my $input    = shift;
 	my $offset   = 0;
 	my @q        = ();
 	my $index;
@@ -73,17 +71,16 @@ sub read_fastrecovery {
 	# Read the max index and offset
 	#
 	$_ = <$fr>;
-	die "Bad fast recovery file" if ! defined $_;
+	die "Bad fast recovery file" if !defined $_;
 	$_ =~ s/.*max: //;
 	( $index, $offset ) = split;
 	my @offsets = <$fr>;
 	foreach my $o (@offsets) {
-		
-#		seek $inputf, $_, 0 or die "Unable to seek to input file location $_\n";
+
 		die "Invalid offset: $o is larger than $offset\n" if ( $o > $offset );
-		push @q, NERSC::TaskFarmer::Reader::read_input( 1, $o);
+		push @q, NERSC::TaskFarmer::Reader::read_input( 1, $o );
 	}
-	setpos($index,$offset);
+	setpos( $index, $offset );
 
 #        printf LOG "Recovered %d inputs from $filename\n", scalar @{$state->{ondeck}};
 	return @q;
@@ -99,27 +96,15 @@ sub read_fastrecovery {
 #
 sub write_fastrecovery {
 	my $filename = shift;
-	my $input    = shift;
-	my @recoverylist;
-
+	
+  die "No filename for writing fastrecovery" unless defined $filename;
 	open( FR, "> $filename.new" );
 
-	#  $offset=tell($inputf)-length($input{$next_header}->{input});
-	my ($index,$offset) = getpos();
+	my ( $index, $offset ) = getpos();
 	printf FR "# max: %ld %ld\n", $index, $offset;
 	my $ct = 0;
-
-	for my $inputid ( sort { $a <=> $b } keys %{$input} ) {
-		if ( $input->{$inputid}->{status} ne 'completed' ) {
-			push @recoverylist, $inputid;
-		}
-	}
-
-	#check_inputs(@recoverylist);
-	foreach my $inputid (@recoverylist) {
-
-		#    print FR $input->{$inputid}->{input};
-		printf FR "%d\n", $input->{$inputid}->{offset};
+	foreach my $offset ( pending_inputs() ) {
+		printf FR "%d\n", $offset;
 		$ct++;
 	}
 	close FR;
