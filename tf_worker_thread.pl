@@ -5,7 +5,6 @@
 #
 # Author: Shane Canon
 #
-# TODO Improve error handling when writing to the socket
 #
 use IO::Handle;
 use IO::File;
@@ -115,6 +114,7 @@ sub catfiles {
     print $sock "DONE\n";
     unlink "$TMPDIR/$file";
   }
+  print $sock "DONEFILES\n";
 # Cleanup any files in the work directory
 #
   foreach (@files){
@@ -205,10 +205,10 @@ sub send_and_get {
     else{
       print $sock "RESULTS $step\n";
       catfiles($sock);
-      print $sock "DONE\n";
+      print $sock "DONERESULTS\n";
     }
     $_=<$sock>;
-    $error=1 unless /RECEIVED/;
+    $error=1 unless /ACK /;
   }
   print $sock "NEXT\n";
   my $step=<$sock>;

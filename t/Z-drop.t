@@ -4,7 +4,7 @@
 #
 #########################
 
-use Test::More tests => 7;
+use Test::More tests => 10;
 
 BEGIN { use_ok('NERSC::TaskFarmer::Tester') }
 
@@ -33,8 +33,9 @@ $ENV{TF_TIMEOUT} = 1;
 $ENV{TESTFILE} = "drop";
 qx "$TR --tfheartbeat=4 --tfdebuglevel=5 -i $IFILE $TESTER arg1 > test.out 2> test.err";
 
-ok( countstring($LFILE,'Missing files'), 'Missed files as expect' );
+ok( countstring($LFILE,'Read error'), 'Read error as expect' );
 ok( -e $DONE, 'Client Timeout - Finished' );
+ok( compsize( $IFILE,'test.out' ), "Check output - drop" );
 cleanup_tests();
 
 $ENV{THREADS}    = 1;
@@ -44,8 +45,9 @@ $ENV{TF_TIMEOUT} = 1;
 $ENV{TESTFILE} = "skipfile";
 qx "$TR --tfheartbeat=4 --tfdebuglevel=5 -i $IFILE $TESTER arg1 > test.out 2> test.err";
 
-ok( countstring($LFILE,'Missing files'), 'Missed files as expect' );
+ok( countstring($LFILE,'Missing files')>0, 'Missed files as expect' );
 ok( -e $DONE, 'Skipped file - Finished' );
+ok( compsize( $IFILE,'test.out' ), "Check output - skip file" );
 cleanup_tests();
 
 $ENV{THREADS}    = 1;
@@ -57,5 +59,6 @@ qx "$TR --tfheartbeat=4 --tfdebuglevel=5 -i $IFILE $TESTER arg1 > test.out 2> te
 
 ok( countstring($LFILE,' Truncated read'), 'Truncated read as expect' );
 ok( -e $DONE, 'Truncated read - Finished' );
+ok( compsize( $IFILE,'test.out' ), "Check output - read error" );
 #cleanup_tests();
 

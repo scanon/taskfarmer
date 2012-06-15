@@ -1,10 +1,10 @@
 package NERSC::TaskFarmer::Jobs;
 
-#TODO Flush on buffer size
-
 use 5.010000;
 use strict;
 use warnings;
+use threads;
+use threads::shared;
 
 require Exporter;
 
@@ -239,6 +239,8 @@ sub requeue_job {
 
 sub update_job_stats {
 	my $jstep = shift;
+	my @stats;
+	#TODO Use stats as key value pair to record interesting stuff
 
 	if ( defined $job{$jstep} ) {
 		$job{$jstep}->{lastheartbeat} = time;

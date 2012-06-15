@@ -33,6 +33,7 @@ our @EXPORT = qw(
 	difffiles
 	countstring
 	sendmess
+	compsize
 );
 
 sub setup_test {
@@ -117,6 +118,15 @@ sub countstring {
 		$ct++ if /$string/;
 	}
 	return $ct;
+}
+
+sub compsize {
+	my $f1 = shift;
+	my $f2 = shift;
+	my @s1 = stat $f1;
+	my @s2 = stat $f2;
+	return 1 if $s1[7] eq $s2[7];
+	return 0;
 }
 
 sub sendmess {

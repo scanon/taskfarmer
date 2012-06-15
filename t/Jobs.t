@@ -3,6 +3,8 @@
 
 #########################
 
+use threads;
+use threads::shared;
 use Test::More tests => 14;
 use NERSC::TaskFarmer::Config;
 use NERSC::TaskFarmer::Stats;

@@ -1,5 +1,7 @@
 package NERSC::TaskFarmer::Output;
 
+# TODO Close files that aren't accessed for a while
+
 use 5.010000;
 use strict;
 use warnings;
@@ -28,18 +30,20 @@ our @EXPORT = qw(
 	flush_output
 	buffer_output
 	close_all
-	);
+);
 
 our $VERSION = '0.01';
 
 our %output;
 our $next_flush;
 our $config;
-our @buffered;
+our @buffered; # list of inputs in buffered state
+our $buffer_size; # number of bytes buffered
 
 sub init_output {
 	$config   = shift;
 	@buffered = ();
+	$buffer_size=0;
 
 	$next_flush = time + $config->{FLUSHTIME};
 }
@@ -55,27 +59,28 @@ sub close_all {
 # This tries to keep everything in a consistent state.
 #
 sub flush_check {
-	flush_output();
-	$next_flush = time + $config->{FLUSHTIME};
+	if ( time > $next_flush || $buffer_size > $config->{MAXBUFF} ) {
+		flush_output();
+		$next_flush = time + $config->{FLUSHTIME};
+	}
 }
 
 sub buffer_output {
-	my $list = shift;
+	my $list          = shift;
 	my $scratchbuffer = shift;
 
 	DEBUG("Buffer output called");
-	push @buffered,@{$list};
-	update_status( 'buffered', @{$list } );
+	push @buffered, @{$list};
+	update_status( 'buffered', @{$list} );
 	foreach my $file ( keys %{$scratchbuffer} ) {
 		DEBUG("Copying $file to buffer");
 		$output{$file}->{buffer} .= $scratchbuffer->{$file};
+		$buffer_size += length( $scratchbuffer->{$file} );
 	}
 
 }
 
 sub flush_output {
-
-	#|| $buffer_size > $config->{MAXBUFF} );
 
 	DEBUG("Flush called");
 	foreach my $file ( keys %output ) {
@@ -109,8 +114,9 @@ sub flush_output {
 
 	update_status( 'completed', @buffered );
 	@buffered = ();
+	$buffer_size = 0;
 
-	my $ct = write_fastrecovery( $config->{FR_FILE});
+	my $ct = write_fastrecovery( $config->{FR_FILE} );
 	DEBUG("Wrote fast recovery ($ct items)");
 	DEBUG("Next flush in $config->{FLUSHTIME} seconds");
 }

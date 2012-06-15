@@ -1,7 +1,6 @@
 #!/usr/bin/env perl
 
 # TODO Close files that aren't accessed for a while
-# TODO Move output handler to separate module
 
 use threads;
 use threads::shared;

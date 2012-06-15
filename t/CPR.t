@@ -7,6 +7,8 @@
 
 use Test::More tests => 5;
 use IO::File;
+use threads;
+use threads::shared;
 
 BEGIN { use_ok('NERSC::TaskFarmer::Reader') };
 BEGIN { use_ok('NERSC::TaskFarmer::CPR') };

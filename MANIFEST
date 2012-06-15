@@ -48,4 +48,4 @@ tf_server.pl
 tf_worker
 tf_worker_thread.pl
 tfprogress.pl
-tfrun.sh
+tfrun

@@ -1,6 +1,5 @@
 package NERSC::TaskFarmer::Server;
 
-use 5.010000;
 use strict;
 use warnings;
 
@@ -72,8 +71,6 @@ sub Start {
 		Carp::confess("Dumping backtrace.");
 	};
 
-	my $next_flush = time + $config->{FLUSHTIME};
-
 	# make the socket
 	my %sockargs = (
 		Proto   => 'tcp',
@@ -86,7 +83,7 @@ sub Start {
 
 	my $sock = new IO::Socket::INET->new(%sockargs)
 		or die "Unable to create socket\n";
-	DEBUG("Starting Server on ".$sock->sockport());
+	DEBUG( "Starting Server on " . $sock->sockport() );
 
 	writeline( $config->{SOCKFILE}, $sock->sockport() . "\n" );
 
@@ -171,59 +168,73 @@ sub do_request {
 	my $command;
 	my $ident = "noid";
 	my $scratchbuffer;
+	my $jstep;
+	my $bytesread    = 0;
+	my $bytesexpected =0;
+	my $success = 0;
+	my $nfiles  = 0;
+	my $nfilesr = 0;
 
 	# Read from client.  Process requests and reponse.
 	#
 	while (<$sock>) {
 
-		#		DEBUG("COMMAND: $_");
+		DEBUG("COMMAND: $_");
 		if (/^RESULTS /) {
-			my ( $command, $jstep ) = split;
+			( $command, $jstep ) = split;
 			chomp $jstep;
-			my $bytes   = 0;
-			my $success = 1;
-			my $nfiles;
-			map             { delete $scratchbuffer->{$_} } keys %{$scratchbuffer};
-			while (<$sock>) {
-				if (/^FILES /) {
-					( $command, $nfiles ) = split;
-					DEBUG("Number of files: $nfiles for $jstep");
-				}
-				last if /^DONE$/;
-				my $readbytes = 0;
-				$readbytes = read_file( $sock, $scratchbuffer, $_ ) if /^FILE /;
+			map { delete $scratchbuffer->{$_} } keys %{$scratchbuffer};
+		}
+		elsif (/^FILES /) {
+			( $command, $nfiles ) = split;
+			DEBUG("Number of files: $nfiles for $jstep");
+		}
+		elsif (/^FILE /) {
+			my $readbytes = 0;
+			my ($command, $file, $bytes) = split;
+			$bytesexpected+=$bytes;
 
-				if ( $readbytes < 0 ) {
-					ERROR("Truncated read in Job step $jstep");
-					$success = 0;
-				}
-				else {
-					$bytes += $readbytes;
-				}
+			$readbytes = read_file( $sock, $scratchbuffer, $_ ) if /^FILE /;
+			if ( $readbytes < 0 ) {
+				ERROR("Truncated read in Job step $jstep on file $file");
 			}
-			if ( $nfiles != scalar( keys %{$scratchbuffer} ) ) {
-				my $nfilesr = scalar keys %{$scratchbuffer};
+			else {
+				$bytesread += $readbytes;
+				$nfilesr++;
+			}
+		}
+		elsif (/DONEFILES/) {
+			if ( $nfiles != $nfilesr ) {
 				ERROR("Missing files ($nfiles vs $nfilesr) for $jstep");
 				$success = 0;
 			}
-			if ($success) {
+			elsif ($bytesread != $bytesexpected){
+				ERROR("Missing bytes for $jstep");
+				$success =0;
+			}
+			else{
+				$success =1
+			}
+		}
+		elsif (/DONERESULTS/) {
+			if ( $success && isajob($jstep) ) {
 
 				# Queue process job && defined $job{$jstep}
-				print $sock "RECEIVED $jstep\n";
-				my $status = process_job( $jstep, $ident, $bytes, $scratchbuffer );
+				print $sock "ACK $jstep\n";
+				my $status = process_job( $jstep, $ident, $bytesread, $scratchbuffer );
 			}
 			elsif ( !$success && isajob($jstep) ) {
-				ERROR("Processing job step $jstep");
-				print $sock "RECEIVED $jstep\n";
+				ERROR("Read error job step $jstep");
+				print $sock "ACK $jstep\n";
 				increment_errors();
 				requeue_job($jstep);
 			}
 			else {
 				ERROR("Unexpected report from $clientaddr:$ident for $jstep");
-				print $sock "RECEIVED $jstep\n";
+				print $sock "ACK $jstep\n";
 				$status = 0;
 			}
-		}    #
+		}
 		elsif (/^IDENT /) {
 			( $command, $ident ) = split;
 		}
@@ -284,9 +295,8 @@ sub read_file {
 	my $scratchbuffer = shift;
 	$_ = shift;
 
-	my $clientaddr = $sock->peerhost();
-	my $bytes      = 0;
-	my $alert      = 0;
+	my $bytes = 0;
+	my $alert = 0;
 	my ( $command, $file, $size ) = split;
 	$scratchbuffer->{$file} = "";
 	DEBUG("Reading $file size $size");
