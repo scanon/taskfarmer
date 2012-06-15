@@ -1,9 +1,10 @@
 package NERSC::TaskFarmer::Reader;
 
-use 5.010000;
 use strict;
 use warnings;
 
+require threads;
+require threads::shared;
 use NERSC::TaskFarmer::Log;
 
 require Exporter;
@@ -39,24 +40,29 @@ our @EXPORT = qw(
 );
 
 our $VERSION = '0.01';
-our $index   = 0;
+our $index : shared;
 our $inputf;
 our $size;
 our $config;
-our $input;
-our @failed;
-our $maxretry=8;
+our %input : shared;
+our $maxretry = 8;
+our %counters : shared;
+our $pos : shared = 0;
 
 sub init_read {
 	$config = shift;
-	$input = {};
-	my $file   = $config->{INPUT};
+	my $file = $config->{INPUT};
 	$inputf = new IO::File $file
 		or die "Unable to open input file ($file)\n";
 	my @stati = stat $inputf;
-	$size = $stati[7];
-	$maxretry=$config->{MAXRETRY};
-
+	$size     = $stati[7];
+	$maxretry = $config->{MAXRETRY};
+	$index    = 0;
+	foreach $_ ( 'ondeck', 'in progress', 'failed', 'buffered', 'completed',
+		'retry' )
+	{
+		$counters{$_} = 0;
+	}
 }
 
 #
@@ -68,20 +74,28 @@ sub init_read {
 sub read_input {
 	my $nread  = shift;
 	my $offset = shift;
+	my $thread = shift;
 	my $ct     = 0;
 	my $l      = 0;
 	my $id;
 	my @list;
+	lock($pos);
 
+#	print "Start: $pos\n";
 	die "File not initialized yet!" if ( !defined $inputf );
-	return @list                    if eof($inputf);
+	return @list if ( eof($inputf) || !defined $pos );
 
 	if ( defined $offset ) {
 		seek $inputf, $offset, 0
 			or die "Unable to seek to input file location $offset\n";
 	}
+	else {
+		seek $inputf, $pos, 0;
+	}
 
 	while (<$inputf>) {
+
+		#		print $thread.": ".tell($inputf)."\n" if defined $thread;
 		die "Bad start: $_" if ( $l eq 0 && !/^>/ );
 		if (/^>/) {
 			$ct++;
@@ -89,18 +103,22 @@ sub read_input {
 			$id = tell($inputf) - length($_);
 			$index++;
 			my ( $bl, $header, $rest ) = split /[> \r\n]/;
-			$input->{$id}->{header} = $header;
-			$input->{$id}->{input}  = $_;
-			$input->{$id}->{retry}  = 0;
-			$input->{$id}->{offset} = $id;
-			$input->{$id}->{index}  = $index;
-			$input->{$id}->{status} = 'ondeck';
-			$input->{$id}->{length} = length($_);
+			my %in : shared;
+			$in{header} = $header;
+			$in{input}  = $_;
+			$in{retry}  = 0;
+			$in{offset} = $id;
+			$in{index}  = $index;
+			$in{status} = 'ondeck';
+			$in{length} = length($_);
+			$input{$id} = \%in;
+			$counters{'ondeck'}++;
+
 			push @list, $id;
 		}
 		else {
-			$input->{$id}->{input} .= $_;
-			$input->{$id}->{length}+=length($_);
+			$input{$id}->{input} .= $_;
+			$input{$id}->{length} += length($_);
 		}
 		$l++;
 	}
@@ -108,6 +126,9 @@ sub read_input {
 		my $length = length $_;
 		seek $inputf, -$length, 1 or die "Unable to step back: $length";
 	}
+	$pos = tell $inputf;
+
+	#	print "Stop: $index\n";
 	return @list;
 }
 
@@ -116,29 +137,33 @@ sub check_inputs {
 	foreach my $inputid (@_) {
 		print STDERR "Bad inputid: $inputid\n"
 			if ( !defined $inputid || $inputid eq '^$' );
-		die "Bad input in retry $inputid\n\n$input->{$inputid}->{input}\n"
-			unless $input->{$inputid}->{input} =~ /^>/;
+		die "Bad input in retry $inputid\n\n$input{$inputid}->{input}\n"
+			unless $input{$inputid}->{input} =~ /^>/;
 	}
 }
 
 sub failed_inputs {
-	return scalar @failed;
+	return $counters{failed};
 }
 
 sub retry_inputs {
-  my @list;
-  
-	foreach my $inputid ( @_ ) {		
-		$input->{$inputid}->{retry}++;
+	my @list;
+
+	foreach my $inputid (@_) {
+		$input{$inputid}->{retry}++;
 		DEBUG( sprintf "Retrying %s for %d time",
-			$inputid, $input->{$inputid}->{retry} );
-		if ( $input->{$inputid}->{retry} < $maxretry ) {
+			$inputid, $input{$inputid}->{retry} );
+		if ( $input{$inputid}->{retry} < $maxretry ) {
 			push @list, $inputid;
-			$input->{$inputid}->{status} = 'retry';
+			update_status( 'retry', $inputid );
+
+			#			$input{$inputid}->{status} = 'retry';
 		}
 		else {
 			ERROR("$inputid hit max retries");
-			push @failed, $inputid;
+			update_status( 'failed', $inputid );
+
+			#			push @failed, $inputid;
 		}
 	}
 	return @list;
@@ -146,63 +171,72 @@ sub retry_inputs {
 
 sub pending_inputs {
 	my @list;
-	
-		for my $inputid ( sort { $a <=> $b } keys %{$input} ) {
-		if ( $input->{$inputid}->{status} ne 'completed' ) {
-			push @list, $input->{$inputid}->{offset};
+
+	for my $inputid ( sort { $a <=> $b } keys %input ) {
+		if ( $input{$inputid}->{status} ne 'completed' ) {
+			push @list, $input{$inputid}->{offset};
 		}
 	}
-	return @list
+	return @list;
 }
 
 sub remaining_inputs {
-	return 1 if (! eof($inputf))	;
-	# TODO Replace this with a set of counters to avoid the loop
-	foreach (keys %{$input}){
-		my $s=$input->{$_}->{status};
-		return 1 if ($s ne 'completed' && $s ne 'failed' && $s ne 'buffered');
-	}
+
+	return 1 if ( !eof($inputf) );
+
+	#foreach (keys %{$input}){
+	#	my $s=$input{$_}->{status};
+	#		return 1 if ($s ne 'completed' && $s ne 'failed' && $s ne 'buffered');
+	#}
+	return 1 if ( $counters{ondeck} > 0 || $counters{retry} > 0 );
 	return 0;
 }
 
 sub get_inputs {
-	return $input;
+	return \%input;
 }
+
 sub get_input_data {
 	my $buffer;
 	foreach my $inputid (@_) {
-		$buffer .= $input->{$inputid}->{input};
+		$buffer .= $input{$inputid}->{input};
 	}
 	return $buffer;
 }
 
 sub isainput {
 	my $id = shift;
-	return defined $input->{$id};
+	return defined $input{$id};
 }
 
-sub inputlength{
+sub inputlength {
 	my $id = shift;
-	return undef if (! defined $input->{$id});
-	return $input->{$id}->{length};
+	return undef if ( !defined $input{$id} );
+	return $input{$id}->{length};
 }
 
 sub update_status {
-	my $state=shift;
-	map { $input->{$_}->{status} = $state } @_;
+	my $state = shift;
+	foreach (@_) {
+		my $oldstate = $input{$_}->{status};
+		$counters{$oldstate}--;
+		$counters{$state}--;
+		$input{$_}->{status} = $state;
+	}
 	return @_;
 }
 
 sub get_status {
 	my $id = shift;
-	return undef if (! defined $input->{$id});
-	return $input->{$id}->{status};
+	return undef if ( !defined $input{$id} );
+	return $input{$id}->{status};
 }
 
 sub cleanup_oldinputs {
 
-	foreach my $id ( sort keys %{$input} ) {
-		delete $input->{$id} if $input->{$id} && $input->{$id}->{status} eq 'completed';
+	foreach my $id ( sort keys %input ) {
+		delete $input{$id}
+			if $input{$id} && $input{$id}->{status} eq 'completed';
 	}
 }
 
