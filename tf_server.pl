@@ -145,7 +145,7 @@ $SIG{INT} = \&catch_int;
 #
 $SIG{'USR2'} = sub { 
 	ERROR("Caught SIGUSR2.  Dumping backtrace and exiting.");
-    Carp::confess("Dumping backtrace.");
+	Carp::confess("Dumping backtrace.");
 };
 # This is the main work loop.
 while ( $remaining_jobs || $remaining_inputs ) {
@@ -266,6 +266,7 @@ sub do_request {
 					DEBUG("Number of files: $nfiles for $jstep");
 				}
 				last if /^DONE$/;
+				# TODO add expected flag for timed out messages
 				my $readbytes = read_file( $sock, $_ ) if /^FILE /;
 				if ( $readbytes < 0 ) {
 					ERROR("Truncated read in Job step $jstep");

@@ -77,6 +77,18 @@ launch_threads() {
   wait
 }
 
+# Check if we can atleast write 256MB of output
+#
+check_node() {
+  dd if=/dev/zero of=$TF_TMPDIR/testfile bs=1k count=256k > /dev/null 2>&1
+  succ=$?
+  rm $TF_TMPDIR/testfile
+  if [ $succ -ne 0 ] ;then
+    echo "Black listing $BID.  /tmp full." >&2
+    exit
+  fi
+}
+
 
 # Determine the number of threads
 #
@@ -85,6 +97,16 @@ launch_threads() {
 # Run the IDCOMMAND
 eval $IDCOMMAND
 export BID=$ID
+
+check_node
+
+
+if [ ! -z $BLACKLIST ] ; then
+  if [ $(grep -c "^$BID$" $BLACKLIST ) -gt 0 ] ; then
+    echo "$BID found in blacklist. Exiting." >&2
+    exit
+  fi
+fi
 
 if [ ! -z $TF_SERVERS ] ; then
   for l in $(cat $TF_SERVERS|awk -F: '{print $1":"$2}') ; do
