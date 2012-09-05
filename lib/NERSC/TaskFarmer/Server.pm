@@ -110,7 +110,7 @@ sub Start {
 			close $new_sock;
 		}
 		check_timeouts();
-		NERSC::TaskFarmer::Output::flush_check();
+#		NERSC::TaskFarmer::Output::flush_check();
 
 		$rj = remaining_jobs();
 		$ri = remaining_inputs();
@@ -123,8 +123,7 @@ sub Start {
 	}
 	finalize_jobs();
 	INFO("Doing final flush");
-	flush_output();
-	close_all();
+	finalize_output();
 	INFO("All done");
 	writeline( $config->{DONEFILE}, "done" ) if ( failed_inputs() eq 0 );
 	closelog();
@@ -135,7 +134,8 @@ sub Start {
 #
 sub catch_int {
 	my $signame = shift;
-	flush_output();
+	finalize_output();
+#	flush_output();
 	close_all();
 	ERROR("Exiting on signal $signame");
 	closelog();

@@ -3,8 +3,9 @@
 
 #########################
 
-use Test::More tests => 2;
+use Test::More tests => 3;
 use IO::File;
+use NERSC::TaskFarmer::Tester;
 
 BEGIN { use_ok('NERSC::TaskFarmer::Log') };
 
@@ -29,4 +30,10 @@ close L;
 ok($l=~/ERROR: error/, 'Test Error Log');
 #ok($input{$t1}->{offset} eq $input2{$t1}->{offset}, 'test recovery inputs');
 
+my $t=startlogthread();
+ERROR("test");
+stoplogthread();
+$t->join();
+ok(countstring($lfile,'ERROR: test'),'Logging in a thread');
 unlink ($lfile) if ( -e $lfile);
+

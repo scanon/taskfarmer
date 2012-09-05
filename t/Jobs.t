@@ -5,7 +5,7 @@
 
 use threads;
 use threads::shared;
-use Test::More tests => 14;
+use Test::More tests => 15;
 use NERSC::TaskFarmer::Config;
 use NERSC::TaskFarmer::Stats;
 use NERSC::TaskFarmer::Reader;
@@ -15,7 +15,7 @@ BEGIN { use_ok('NERSC::TaskFarmer::Jobs') }
 
 #########################
 
-push @ARGV, '--tfbatchsize=1';
+push @ARGV, '--tfbatchsize=32';
 push @ARGV, ( '-i', 't/test.faa' );
 my $config = initialize_conf();
 my $sb;
@@ -119,6 +119,23 @@ check_timeouts();
 ok(get_status($id) eq 'retry', 'Timeout test');
 
 
+my @thr;
+my @q :shared;
+for (1..68){
+ push @thr,threads->create(\&queuethr);
+}
+
+	map { $_->join()} @thr;
+ok(scalar @q eq 45,'Threaded queue');
+
+map {process_job($_,'tester',1,$sb)} @q;
+	
+
+sub queuethr {
+	$j=queue_job('tester');
+	push @q, $j->{jid} if (defined $j->{jid});
+}
+#finalize_output();
 finalize_jobs();
 
 

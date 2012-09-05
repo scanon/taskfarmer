@@ -3,7 +3,8 @@ package NERSC::TaskFarmer::CPR;
 use 5.010000;
 use strict;
 use warnings;
-
+require threads;
+require threads::shared;
 use NERSC::TaskFarmer::Reader;
 
 require Exporter;
@@ -34,6 +35,7 @@ our @EXPORT = qw(
 );
 
 our $VERSION = '0.01';
+our $lock : shared;
 
 #
 # Check that the fast recovery file isn't too new
@@ -62,7 +64,6 @@ sub read_fastrecovery {
 	my $offset   = 0;
 	my @q        = ();
 	my $index;
-
 	return unless ( -e $filename );
 
 	#        print STDERR "Recoverying using $filename\n";
@@ -96,8 +97,8 @@ sub read_fastrecovery {
 #
 sub write_fastrecovery {
 	my $filename = shift;
-	
-  die "No filename for writing fastrecovery" unless defined $filename;
+	lock($lock);
+	return 0 unless defined $filename;
 	open( FR, "> $filename.new" );
 
 	my ( $index, $offset ) = getpos();

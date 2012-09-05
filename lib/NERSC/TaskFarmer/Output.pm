@@ -26,42 +26,64 @@ our @EXPORT_OK = ( @{ $EXPORT_TAGS{'all'} } );
 
 our @EXPORT = qw(
 	init_output
-	flush_check
-	flush_output
 	buffer_output
-	close_all
+	finalize_output
 );
 
 our $VERSION = '0.01';
 
-our %output;
-our $next_flush;
+our %output : shared;
+our $next_flush : shared;
 our $config;
-our @buffered; # list of inputs in buffered state
-our $buffer_size; # number of bytes buffered
+our @buffered : shared;       # list of inputs in buffered state
+our $buffer_size : shared;    # number of bytes buffered
+our %handles;
+our $doorbell;
+our $writerthread;
 
 sub init_output {
-	$config   = shift;
-	@buffered = ();
-	$buffer_size=0;
+	$config      = shift;
+	@buffered    = ();
+	$buffer_size = 0;
 
-	$next_flush = time + $config->{FLUSHTIME};
+	$next_flush   = time + $config->{FLUSHTIME};
+	$doorbell     = new Thread::Queue;
+	$writerthread = threads->create( \&writer, $doorbell );
+	return $writerthread;
+}
+
+sub finalize_output {
+	if ( defined $writerthread ) {
+		print "Sending shutdown\n";
+		$doorbell->enqueue(undef);
+		$writerthread->join();
+		$writerthread = undef;
+	}
+}
+
+sub writer {
+	my $q = shift;
+	while ( my $message = $q->dequeue ) {
+		print "Message: $message\n";
+		*STDOUT->flush();
+		if ( !defined $message ) {
+			print STDERR "Emptry message: shutting down\n";
+			flush_output();
+			close_all();
+			return;
+		}
+		elsif ( time >= $next_flush || $buffer_size > $config->{MAXBUFF} ) {
+			print "writer writing\n";
+			flush_output();
+			$next_flush = time + $config->{FLUSHTIME};
+		}
+	}
 }
 
 sub close_all {
 	foreach my $file ( keys %output ) {
-		$output{$file}->{handle}->close()
-			if defined $output{$file}->{handle};
-	}
-}
-
-# Flush output, progress, and create fast_recovery file
-# This tries to keep everything in a consistent state.
-#
-sub flush_check {
-	if ( time > $next_flush || $buffer_size > $config->{MAXBUFF} ) {
-		flush_output();
-		$next_flush = time + $config->{FLUSHTIME};
+		$handles{$file}->close()
+			if defined $handles{$file};
 	}
 }
 
@@ -69,51 +91,52 @@ sub buffer_output {
 	my $list          = shift;
 	my $scratchbuffer = shift;
 
+	lock($buffer_size);
 	DEBUG("Buffer output called");
 	push @buffered, @{$list};
 	update_status( 'buffered', @{$list} );
 	foreach my $file ( keys %{$scratchbuffer} ) {
 		DEBUG("Copying $file to buffer");
-		$output{$file}->{buffer} .= $scratchbuffer->{$file};
+		$output{$file} .= $scratchbuffer->{$file};
 		$buffer_size += length( $scratchbuffer->{$file} );
 	}
-
+	$doorbell->enqueue(1);
 }
 
 sub flush_output {
-
 	DEBUG("Flush called");
+	lock($buffer_size);
 	foreach my $file ( keys %output ) {
-		my $bf = $output{$file}->{buffer};
-		if ( !defined $output{$file}->{handle} ) {
+		my $bf = $output{$file};
+		if ( !defined $handles{$file} ) {
 			DEBUG("Opening new file $file");
 			if ( $file eq "stdout" ) {
-				$output{$file}->{handle} = *STDOUT;
+				$handles{$file} = *STDOUT;
 			}
 			elsif ( $file eq "stderr" ) {
-				$output{$file}->{handle} = *STDERR;
+				$handles{$file} = *STDERR;
 			}
 			else {
-				$output{$file}->{handle} = new IO::File ">> $file";
+				$handles{$file} = new IO::File ">> $file";
 			}
 		}
-		my $handle = $output{$file}->{handle};
+		my $handle = $handles{$file};
 		if ( !defined $handle ) {
 			ERROR("Unable to open file $file.  Exiting");
 			exit -1;
 		}
-		my $blength = length $output{$file}->{buffer};
+		my $blength = length $output{$file};
 		if ( $blength > 0 ) {
-			$output{$file}->{lastwrite} = time;
+#			$output{$file}->{lastwrite} = time;
 			DEBUG("Flushed $blength bytes to $file");
-			print {$handle} $output{$file}->{buffer};
+			print {$handle} $output{$file};
 			$handle->flush();
 		}
-		$output{$file}->{buffer} = '';
+		$output{$file} = '';
 	}
 
 	update_status( 'completed', @buffered );
-	@buffered = ();
+	@buffered    = ();
 	$buffer_size = 0;
 
 	my $ct = write_fastrecovery( $config->{FR_FILE} );

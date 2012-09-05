@@ -48,21 +48,19 @@ our @EXPORT = qw(
 );
 
 our $VERSION = '0.01';
-our %job;
-our $ondeck;
-our $processed = 0;
-our $item      = 0;
+our %job :shared;
+our @ondeck :shared;
+our $processed :shared = 0;
+our $item      :shared = 0;
 our $config;
 our $next_check;
 our $next_status;
 our $last_status = 0;
-our $pf;
 our $chunksize;
 our $progfile;
 
 sub initialize_jobs {
 	$config        = shift;
-	$ondeck        = [];
 
 	$next_check  = time + $config->{POLLTIME};
 	$next_status = time + $config->{FLUSHTIME};
@@ -123,17 +121,17 @@ sub process_job {
 #
 sub queue_job {
 	my $ident = shift;
-	my @list;
+	my @list :shared;
 	my $length = 0;
 	my $ct     = 0;
 	my $bytes =0;
-	
+	lock($item);
 
-	if ( scalar @{$ondeck} < ( $config->{BATCHSIZE} ) ) {
-		push @{$ondeck}, read_input($chunksize);
+	if ( scalar @ondeck < ( $config->{BATCHSIZE} ) ) {
+		push @ondeck, read_input($chunksize);
 	}
-	while ( $ct < $config->{BATCHSIZE} && scalar @{$ondeck} > 0 ) {
-		my $id = shift @{$ondeck};
+	while ( $ct < $config->{BATCHSIZE} && scalar @ondeck > 0 ) {
+		my $id = shift @ondeck;
 		push @list, $id;
 		die "Bad Input ID $id\n" unless isainput($id);
 		$bytes += inputlength( $id);
@@ -149,16 +147,18 @@ sub queue_job {
 
 		# Save info about the job step.
 		#
-		$job{$jid}->{jid}           = $item;
-		$job{$jid}->{start}         = time;
-		$job{$jid}->{finish}        = 0;
-		$job{$jid}->{time}          = 0;
-		$job{$jid}->{bytesin}       = $bytes;
-		$job{$jid}->{list}          = \@list;
-		$job{$jid}->{count}         = $ct;
-		$job{$jid}->{ident}         = $ident;
-		$job{$jid}->{lastheartbeat} = time;
-		$job{$jid}->{length}				= 0;
+		my %newjob :shared;
+		$newjob{jid}           = $item;
+		$newjob{start}         = time;
+		$newjob{finish}        = 0;
+		$newjob{time}          = 0;
+		$newjob{bytesin}       = $bytes;
+		$newjob{list}          = \@list;
+		$newjob{count}         = $ct;
+		$newjob{ident}         = $ident;
+		$newjob{lastheartbeat} = time;
+		$newjob{length}				= 0;
+		$job{$jid}=\%newjob;
 		$item++;
 
 		return $job{$jid};
@@ -169,7 +169,7 @@ sub queue_job {
 }
 
 sub ondeck {
-	push @{$ondeck}, @_
+	push @ondeck, @_
 }
 sub get_job_inputs {
 	my $jstep = shift;
@@ -233,13 +233,13 @@ sub check_timeouts {
 sub requeue_job {
 	my $jstep = shift;
 	DEBUG("Requeue $jstep");
-	unshift @{$ondeck}, retry_inputs( @{ $job{$jstep}->{list} } );
+	unshift @ondeck, retry_inputs( @{ $job{$jstep}->{list} } );
 	delete $job{$jstep};
 }
 
 sub update_job_stats {
 	my $jstep = shift;
-	my @stats;
+	my @stats;	
 	#TODO Use stats as key value pair to record interesting stuff
 
 	if ( defined $job{$jstep} ) {
@@ -261,10 +261,10 @@ sub delete_olddata {
 }
 
 sub finalize_jobs {
-	flush_output();
+	finalize_output();
 
 	#Let's do this somewhere else.  May in CPR.
-	#NERSC::TaskFarmer::Reader::check_inputs( @{$ondeck} );
+	#NERSC::TaskFarmer::Reader::check_inputs( @ondeck );
 
 	update_counters( \%job, 0 );
 }

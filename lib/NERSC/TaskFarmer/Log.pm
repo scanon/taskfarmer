@@ -5,6 +5,9 @@ use strict;
 use warnings;
 
 use IO::File;
+require threads;
+require threads::shared;
+require Thread::Queue;
 
 require Exporter;
 
@@ -17,13 +20,19 @@ our @ISA = qw(Exporter);
 # This allows declaration	use NERSC::TaskFarmer::Log ':all';
 # If you do not need this, moving things directly into @EXPORT or @EXPORT_OK
 # will save memory.
-our %EXPORT_TAGS = ( 'all' => [ qw(
-	
-) ] );
+our %EXPORT_TAGS = (
+	'all' => [
+		qw(
+
+			)
+	]
+);
 
 our @EXPORT_OK = ( @{ $EXPORT_TAGS{'all'} } );
 
 our @EXPORT = qw(
+	startlogthread
+	stoplogthread
 	setlog
 	setloglevel
 	closelog
@@ -35,50 +44,78 @@ our @EXPORT = qw(
 
 our $VERSION = '0.01';
 
-our $log=\*STDERR;
-our $debuglevel=0;
-our $start = time;
+our $log        = \*STDERR;
+our $debuglevel = 0;
+our $start      = time;
+our $logqueue;
+our $logthread;
 
 sub setlog {
-        my $fname = shift;
-        $log = new IO::File ">> $fname" or die "Unable to open log file ($fname)\n";
-        $log->autoflush(1);
-        $debuglevel=shift;
+	my $fname = shift;
+	$log = new IO::File ">> $fname" or die "Unable to open log file ($fname)\n";
+	$log->autoflush(1);
+	$debuglevel = shift;
 }
+
+sub startlogthread {
+	$logqueue  = new Thread::Queue;
+	$logthread = threads->create( \&loggerthread, $logqueue );
+	return $logthread;
+
+}
+
+sub stoplogthread {
+	$logqueue->enqueue(undef);
+}
+
+sub loggerthread {
+	my $q=shift;
+	while ( my $message = $q->dequeue ) {
+		return if (! defined $message);
+		print {$log} $message;
+	}
+}
+
 
 sub closelog {
 	close($log) if defined $log;
 }
 
 sub setloglevel {
-        $debuglevel=shift;
+	$debuglevel = shift;
 }
 
 sub debuglevel {
-        return $debuglevel;
+	return $debuglevel;
 }
 
 sub DEBUG {
-        LOG( "DEBUG", shift ) if $debuglevel > 3;
+	LOG( "DEBUG", shift ) if $debuglevel > 3;
 }
 
 sub INFO {
-        LOG( "INFO", shift ) if $debuglevel > 2;
+	LOG( "INFO", shift ) if $debuglevel > 2;
 }
 
 sub WARN {
-        LOG( "WARN", shift ) if $debuglevel > 1;
+	LOG( "WARN", shift ) if $debuglevel > 1;
 
 }
 
 sub ERROR {
-        LOG( "ERROR", shift ) if $debuglevel > 0;
+	LOG( "ERROR", shift ) if $debuglevel > 0;
 }
 
 sub LOG {
-        my $level   = shift;
-        my $message = shift;
-        printf {$log} "%5d %s: %s\n",time-$start,$level, $message;
+	my $level   = shift;
+	my $message = shift;
+	if ( defined $logqueue ) {
+		my $mess = sprintf "%5d %s: %s\n", time - $start, $level, $message;
+		$logqueue->enqueue($mess);
+	}
+	else {
+		printf {$log} "%5d %s: %s\n", time - $start, $level, $message;
+	}
 }
 
 1;

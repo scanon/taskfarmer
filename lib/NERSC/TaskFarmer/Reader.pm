@@ -241,7 +241,7 @@ sub cleanup_oldinputs {
 }
 
 sub getpos {
-	return ( $index, tell($inputf) );
+	return ( $index, $pos );
 }
 
 sub setpos {
