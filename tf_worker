@@ -12,7 +12,11 @@ if [ ! -z $SKEW ] ; then
   sleep $skew
 fi
 
-export TF_TMPDIR=/tmp/$USER-$$
+# TODO: Potential conflict where to workers could use the same directory in a
+# shared file system.
+[ -z $TF_TMPBASE ] && TF_TMPBASE=/tmp
+export TF_TMPBASE
+export TF_TMPDIR=$TF_TMPBASE/$USER-$$
 
 # Source any setup files that are needed for the system.
 #
@@ -56,7 +60,7 @@ cleanup() {
     fi
   done
   sleep 1
-  cd /tmp
+  cd $TF_TMPBASE
   rm -rf $TF_TMPDIR
   CLEANUP=1
   if [ ! -z $STAGE ] && [ -x "$STAGE" ] ; then
@@ -84,7 +88,7 @@ check_node() {
   succ=$?
   rm $TF_TMPDIR/testfile
   if [ $succ -ne 0 ] ;then
-    echo "Black listing $BID.  /tmp full." >&2
+    echo "Black listing $BID.  $TF_TMPBASE full." >&2
     exit
   fi
 }
@@ -98,7 +102,7 @@ check_node() {
 eval $IDCOMMAND
 export BID=$ID
 
-check_node
+[ -z "$SKIP_CHECK" ] && check_node
 
 
 if [ ! -z $BLACKLIST ] ; then
@@ -118,7 +122,6 @@ if [ ! -z $TF_SERVERS ] ; then
 else
   launch_threads
 fi
-
 
 # Cleanup Cleanup everybody do their share
 #
