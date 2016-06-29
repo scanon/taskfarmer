@@ -124,7 +124,6 @@ else
   launch_threads
 fi
 
-
 # Cleanup Cleanup everybody do their share
 #
 cleanup
