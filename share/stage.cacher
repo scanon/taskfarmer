@@ -1,6 +1,6 @@
 #!/bin/sh
 
-CACHERH=/global/common/carver/tig/cacher/1.1/
+CACHERH=/global/common/edison/tig/cacher/1.1/
 CACHER=$CACHERH/bin/cacher
 
 if [ -z "$CLEANUP" ] ; then

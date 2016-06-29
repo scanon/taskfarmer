@@ -18,7 +18,7 @@ my $BATCHSIZE      = 32;
 my $batchbytes     = 0;
 my $TIMEOUT        = 1800;
 my $TIMEOUT_SOCKET = 10;
-my $heartbeatto    = 600;
+my $heartbeatto    = 1200;
 my $MAXRETRY       = 8;
 my $MAXBUFF        = 100 * 1024 * 1024;    # 100M buffer
 my $FLUSHTIME      = 20;                   # write
@@ -52,6 +52,7 @@ my $result = GetOptions( "tfstatusfile=s"  => \$statusfile );
 my $result = GetOptions( "tfpidfile=s"     => \$pidfile );
 my $result = GetOptions( "tfdebuglevel=i"  => \$debuglevel );
 my $result = GetOptions( "tfheartbeat=i"   => \$heartbeatto );
+my $result = GetOptions( "tfmaxretry=i"   => \$MAXRETRY );
 
 die "No input file specified\n" unless defined $input;
 

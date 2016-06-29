@@ -3,7 +3,6 @@ prefix := /usr
 
 NAME	= taskfarmer
 
-BINFILES=	tfrun
 SHAREFILES=	share/*.conf share/submit_es.q share/stage.cacher
 EXAMPLEFILES=	examples/stage.sh examples/fix_perl_path.sh examples/sample.sh examples/pack.sh \
 		examples/blast.qsub examples/stage.cloud.sh examples/sample.qsub examples/run.cloud

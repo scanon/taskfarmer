@@ -1,0 +1,292 @@
+#!/usr/bin/perl
+#
+# tftemp
+#
+# Shane Canon
+# 2011
+# 
+# This script can be called in three ways.
+# * From the batch script to start things
+# * By the workerthread to do the task work
+#
+# In addition, this script contains routines to
+# * index a input file
+# * generate an taskfarmer input file from an index.
+
+use strict;
+use Cwd;
+use File::Basename;
+use POSIX;
+
+my $MAX_SIZE=8*1024*1024*1024;
+my $window=300;
+my $CHUNKSIZE=60*1024;  # Allow override
+my $marker='>';
+my $CMD="rpsblast";
+
+# Check min args
+#
+die "Not enough argumements. Args:".join(" ", @ARGV).".\n" if scalar @ARGV < 3;
+
+# This means it is being called from the job script
+#
+if ( !defined $ENV{STEP}){
+  print "Starting up taskfarmer\n";
+  startup();
+  exit;
+}
+
+# The rest is the worker part
+
+print STDERR "Running script\n" if defined $ENV{DEBUGTF};
+# Temporary output file.
+my $temp="tmp$$.faa";
+# Parser;
+my $post="skip";
+$post=$ENV{POSTSCRIPT} if (defined $ENV{POSTSCRIPT});
+$SIG{INT} = \&cleanup;
+
+# First we need to create the input file
+open(OUT,"> $temp") or die "Unable to open temporary file\n";
+# Read from stdin the file to read from and the offset.
+# Then write the input to the temporary file.
+my $lastchunk;
+$_=<STDIN>;
+chomp;
+s/> //;
+# Parse input line
+my ($chunk, $file,$offset,$length)=split;
+my $start=time();
+my $buff=readchunk($file,$offset,$length);
+printf STDERR "Got chunk:%d %s\n",$chunk,substr($buff,0,10) if defined $ENV{DEBUGTF};
+check_input($buff);
+print OUT $buff;
+close OUT;
+
+my $step1=time();
+# Fix the output file name.  This is used by the post.
+#
+my $output;
+my $i=find_arg('-o',@ARGV);
+my $directory=$ARGV[$i].".d";
+mkdir $directory if (! -e $directory); 
+$ARGV[$i]=$directory."/part-".$chunk;
+print STDERR "Output: $ARGV[$i]\n" if defined $ENV{DEBUGTF};
+
+#
+print STDERR "Running $0\n" if defined $ENV{DEBUGTF};
+my $cmd=$CMD;
+$cmd.=" -i $temp ";
+$cmd.=join( " ",@ARGV);
+
+# Testing
+#$cmd="/usr/bin/wc -l $temp";
+if ($post ne "skip"){
+  $cmd.="|$post $output";
+}
+print STDERR "Cmd: $cmd\n" if defined $ENV{DEBUGTF};
+system($cmd);
+my $finish=time();
+#printf STDERR "DEBUG: %d %d %d\n",$start,$step1,$finish;
+# Check the exit;
+my $RET=$?>>8;
+print STDERR "Exited with $RET\n" if defined $ENV{DEBUGTF};
+exit $RET if ($RET ne 0);
+unlink $temp if ( -e $temp);
+exit $RET;
+
+#
+#  Customize These
+#
+sub preflight{
+  my $file=shift;
+
+# Is the file there...
+  if (! -e $file){
+    printf("ERROR: $file doesn't exist\n");
+    printf("ERROR: Exiting\n");
+    exit(-1);
+  }
+# Check the size.  We can't cache files that are too large.
+
+
+# Check the striping.  The file needs to be wide stripe in order to get good performance.
+  printf("INFO: Pre-flight check on $file looks good\n");
+}
+
+sub post {
+  my $input=shift;
+  return;
+}
+
+sub check_input {
+  my $input=shift;
+  print STDERR "Error for $chunk\n" if (! $input=~/^>/);
+  return;
+}
+
+# Start the taskfarmer.
+#
+sub startup{
+
+#  Pull of the last two args
+#
+  my $bin=`which $0`;
+  chomp $bin;
+
+  my $db=$ARGV[find_arg('-d',@ARGV)];
+  my $query;
+  for (my $i=0;$i<scalar @ARGV;$i++){
+    if ($ARGV[$i]=~/^-i/){
+      $query=$ARGV[$i+1];
+      $ARGV[$i]='';
+      $ARGV[$i+1]='';
+      last;
+    }
+  }
+
+  my $input=$query.".in";
+
+#  preflight($file);
+  check_fr($input);
+  print "Starting Server\n";
+
+# Generate the input if it doesn't already exist (i.e. this is a restart)
+# The input is one line for each model.  That is how things will be run.
+
+  if ( ! -e $input ) {
+    generate_input($query,$input,$CHUNKSIZE,$marker);
+  }
+  # Configure environment for task farmer.
+  $ENV{TF_HOME}="/global/common/carver/tig/taskfarmer/1.5/" if (! defined $ENV{TF_HOME});
+  $ENV{BATCHSIZE}=1;
+  $ENV{SERVER_TIMEOUT}=1700;
+  #$ENV{STATUSFILE}="/project/projectdirs/genomes/www/sf/tmp-$product.js";
+  $ENV{PATH}.=":$ENV{TF_HOME}/bin";
+  $ENV{Q}="$db*";
+  if (! defined $ENV{STAGE}){
+    $ENV{STAGE}="/usr/common/jgi/hmmer/3.0/bin/stage.cacher";
+  }
+
+# Launch tfrun to start the server.
+  my $ARGS=join " ",@ARGV;
+  print "Running: tfrun -i $input $bin $ARGS\n";
+  print `tfrun --tfdebuglevel=3 -i $input $bin $ARGS`;
+  post($input) if ( -e "done.$input");
+}
+
+
+# Generate an input file that is just the filename and the offset (plus the '> ')
+#
+sub generate_input{
+  my $file=shift;
+  my $OUTPUT=shift;
+  my $cs=shift;
+  my $marker=shift;
+  my $i=0;
+
+  my $S=`stat -L $file -c '%s'`;
+  chomp $S;
+  open(I,$file);
+  open(O,"> $OUTPUT");
+  while(tell(I)<($S-$cs)){
+    my $start=tell(I)-length $_;
+    seek(I,$cs,SEEK_CUR);
+    while(<I>){
+      last if /^$marker/;
+    }
+    my $end=tell(I)-length $_;
+    my $length=$end-$start;
+    print O "> $i $file $start $length\n";
+    $i++;
+  }
+  my $start=tell(I)-length $_;
+  my $length=$S-$start;
+  print O "> $i $file $start $length\n";
+  close I;
+  close O;
+  exit;
+}
+
+#
+# Helper Functions.
+# You shouldn't have to modify these
+#
+
+sub check_cache_size{
+  my $file=shift;
+  my @s=stat $file;
+  if ($s[8] > $MAX_SIZE){
+    printf("ERROR: $file is over $MAX_SIZE bytes\n");
+    printf("ERROR: This is too large to cache.\n");
+    printf("ERROR: Please split the file and run as separate jobs\n");
+    printf("ERROR: Exiting\n");
+    exit(1);
+  }
+}
+
+sub check_stripe{
+  my $file=shift;
+
+# Is this lustre?
+  my $fs=qx"/bin/df $file|grep -v File|awk '{print $1}'|head -1";
+  chomp $fs;
+  my $lustre=qx"/bin/grep $fs /proc/mounts|grep -c lustre";
+
+  if ($lustre ne 0){
+  my $stripe=qx"lfs getstripe $file -c";
+  chomp $stripe;
+  if ($stripe < 16){
+    printf("ERROR: $file isn't properly striped for performance. \n");
+    printf("ERROR: Use the lfs setstripe command to create a directory\n");
+    printf("ERROR: (i.e. lfs setstripe <directory> -c -1\n");
+    printf("ERROR: then copy the file into this directory.\n");
+    printf("ERROR: Exiting\n");
+    exit(1);
+  }
+  }
+}
+
+sub cleanup{
+  exit 1;
+}
+
+sub readchunk {
+  my $ifile=shift;
+  my $off=shift;
+  my $length=shift;
+  my $buffer;
+
+  open(I,$ifile);
+  seek I, $off, SEEK_SET;
+  my $bread=read I,$buffer,$length;
+  ($bread eq $length) or die "Short read of $ifile.  Fix needed\n";
+
+  return $buffer;
+}
+
+sub check_fr {
+  my $input=shift;
+
+  if (-e "fastrecovery.$input" ) {
+    print "Checking that server isn't running\n";
+    my @s=stat "fastrecovery.$input";
+    my $delta=time-$s[9];
+    if ( $delta < $window){
+      print "fastrecovery file is only $delta seconds old.\n";
+      print "Please retry in ".($window-$delta)." seconds\n";
+      exit;
+    }
+  }
+}
+
+sub find_arg{
+  my $option=shift;
+
+  for ($i=0;$i<scalar(@_);$i++){
+    if (@_[$i] eq $option){
+      return $i+1;
+    }
+  }
+  return -1;
+}
